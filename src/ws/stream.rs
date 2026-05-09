@@ -422,6 +422,59 @@ impl Stream {
         Ok(())
     }
 
+    /// Subscribe to typed WebSocket events **with authentication**.
+    ///
+    /// Like [`ws_subscribe_events`](Self::ws_subscribe_events) but sends the
+    /// `X-API-Key` header on the WebSocket upgrade request, enabling private
+    /// channels such as `positions` and `orderEvent`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use limitless::prelude::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let ws: Stream = Limitless::new(
+    ///         Some("lmts_sk_...".into()),
+    ///         Some("base64_secret".into()),
+    ///     );
+    ///     ws.ws_subscribe_authenticated_events(|event| {
+    ///         match event {
+    ///             WsEventKind::Positions(p) => println!("Position update: {p:?}"),
+    ///             WsEventKind::OrderEvent(o) => println!("Order event: {o:?}"),
+    ///             other => println!("Other: {other:?}"),
+    ///         }
+    ///         Ok(())
+    ///     }).await.unwrap();
+    /// }
+    /// ```
+    pub async fn ws_subscribe_authenticated_events<F>(
+        &self,
+        mut handler: F,
+    ) -> Result<(), LimitlessError>
+    where
+        F: FnMut(WsEventKind) -> Result<(), LimitlessError> + 'static + Send,
+    {
+        let stream = self.client.wss_connect(None, true, None).await?;
+        let mut ws_client = WsClient::new(stream);
+
+        Self::perform_handshake(&mut ws_client).await?;
+
+        let mut adapter = move |event_name: &str, payload: &Value| -> Result<(), LimitlessError> {
+            match deserialize_event(event_name, payload) {
+                Some(kind) => handler(kind),
+                None => {
+                    debug!("Failed to deserialize event '{}', skipping", event_name);
+                    Ok(())
+                }
+            }
+        };
+
+        Self::typed_event_loop(&mut ws_client, &mut adapter, None).await?;
+        Ok(())
+    }
+
     /// Perform the Socket.IO handshake: read Engine.IO open, send namespace
     /// connect, wait for ack.
     async fn perform_handshake(ws_client: &mut WsClient) -> Result<(), LimitlessError> {

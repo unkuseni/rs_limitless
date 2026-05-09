@@ -525,6 +525,37 @@ impl LimitlessClient {
             .ws_subscribe_with_commands(cmd_receiver, handler)
             .await
     }
+
+    /// Subscribe to WebSocket events with dynamic command support **and authentication**.
+    ///
+    /// Enables private channels: `subscribe_positions`, `subscribe_order_events`.
+    pub async fn ws_subscribe_authenticated_with_commands<F>(
+        &self,
+        cmd_receiver: tokio::sync::mpsc::UnboundedReceiver<String>,
+        handler: F,
+    ) -> Result<(), LimitlessError>
+    where
+        F: FnMut(Value) -> Result<(), LimitlessError> + 'static + Send,
+    {
+        self.stream()
+            .ws_subscribe_authenticated_with_commands(cmd_receiver, handler)
+            .await
+    }
+
+    /// Subscribe to typed WebSocket events with authentication.
+    ///
+    /// Enables private channels: `positions`, `orderEvent`.
+    pub async fn ws_subscribe_authenticated_events<F>(
+        &self,
+        handler: F,
+    ) -> Result<(), LimitlessError>
+    where
+        F: FnMut(WsEventKind) -> Result<(), LimitlessError> + 'static + Send,
+    {
+        self.stream()
+            .ws_subscribe_authenticated_events(handler)
+            .await
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

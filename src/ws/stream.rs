@@ -264,6 +264,62 @@ impl Stream {
         Ok(())
     }
 
+    /// Subscribe to a stream with dynamic command support **and authentication**.
+    ///
+    /// Like [`ws_subscribe_with_commands`](Self::ws_subscribe_with_commands) but
+    /// sends the `X-API-Key` header on the WebSocket upgrade request, enabling
+    /// private channels:
+    ///
+    /// - `subscribe_positions` — real-time position balance updates
+    /// - `subscribe_order_events` — OME state changes + settlement results
+    ///
+    /// # Requirements
+    ///
+    /// The [`Stream`] must have been constructed with an API key (via
+    /// [`Limitless::new`] or [`LimitlessClient::builder().set_credentials()`]).
+    /// Without a key the connection is still established but private
+    /// subscriptions will fail with an `exception` event.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use limitless::prelude::*;
+    /// use tokio::sync::mpsc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let ws: Stream = Limitless::new(
+    ///         Some("lmts_sk_...".into()),
+    ///         Some("base64_secret".into()),
+    ///     );
+    ///     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    ///
+    ///     // Send subscription commands after connecting
+    ///     tokio::spawn(async move {
+    ///         let sub = frame_socketio_event("subscribe_order_events", &serde_json::json!({}));
+    ///         let _ = cmd_tx.send(sub);
+    ///     });
+    ///
+    ///     ws.ws_subscribe_authenticated_with_commands(cmd_rx, |event| {
+    ///         println!("Private event: {event}");
+    ///         Ok(())
+    ///     }).await.unwrap();
+    /// }
+    /// ```
+    pub async fn ws_subscribe_authenticated_with_commands<F>(
+        &self,
+        cmd_receiver: mpsc::UnboundedReceiver<String>,
+        handler: F,
+    ) -> Result<(), LimitlessError>
+    where
+        F: FnMut(Value) -> Result<(), LimitlessError> + 'static + Send,
+    {
+        let stream = self.client.wss_connect(None, true, None).await?;
+        let mut ws_client = WsClient::new(stream);
+        Self::event_loop(&mut ws_client, handler, Some(cmd_receiver)).await?;
+        Ok(())
+    }
+
     /// Subscribe to market updates for a specific slug.
     ///
     /// Handles the full lifecycle: connect, handshake, subscribe, and

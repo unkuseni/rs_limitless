@@ -252,23 +252,38 @@ impl Client {
     /// # Arguments
     ///
     /// * `_request` — Optional initial subscription payload (sent as Socket.IO frame).
-    /// * `_authenticated` — If `true`, the `X-API-Key` / `lmts-api-key` header is sent.
+    /// * `authenticated` — If `true`, the `X-API-Key` header is sent with the
+    ///   WebSocket upgrade request, enabling private channels (positions,
+    ///   order events) that require authentication.
     /// * `_timeout_secs` — Optional connection timeout.
     pub async fn wss_connect(
         &self,
         _request: Option<String>,
-        _authenticated: bool,
+        authenticated: bool,
         _timeout_secs: Option<u64>,
     ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, LimitlessError> {
-        // The Limitless Exchange uses Socket.IO (Engine.IO v4) over WebSocket.
-        // The `/markets` path is the Socket.IO namespace, NOT the WebSocket
-        // endpoint. The actual WebSocket endpoint is at:
-        //   /socket.io/?EIO=4&transport=websocket
-        let ws_url =
-            WsUrl::parse("wss://ws.limitless.exchange/socket.io/?EIO=4&transport=websocket")
-                .map_err(|e| LimitlessError::Base(format!("Invalid WS URL: {}", e)))?;
+        let ws_url_str = "wss://ws.limitless.exchange/socket.io/?EIO=4&transport=websocket";
 
-        let (stream, _response) = connect_async(ws_url.to_string()).await?;
+        // When authentication is requested and we have an API key, include
+        // it as an X-API-Key header on the WebSocket upgrade request.
+        // This enables private channels: subscribe_positions, subscribe_order_events.
+        if authenticated {
+            if let Some(ref api_key) = self.api_key {
+                use tokio_tungstenite::tungstenite::http::Request as WsRequest;
+                let request = WsRequest::builder()
+                    .uri(ws_url_str)
+                    .header("X-API-Key", api_key.as_str())
+                    .body(())
+                    .map_err(|e| {
+                        LimitlessError::Base(format!("Failed to build WS request: {}", e))
+                    })?;
+                let (stream, _response) = connect_async(request).await?;
+                return Ok(stream);
+            }
+            log::warn!("authenticated WS requested but no API key configured");
+        }
+
+        let (stream, _response) = connect_async(ws_url_str).await?;
         Ok(stream)
     }
 }

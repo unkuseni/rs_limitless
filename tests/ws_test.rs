@@ -208,7 +208,7 @@ async fn ws_dynamic_subscribe_unsubscribe() {
     //   42/markets,["subscribe_market_prices",{"marketSlugs":["btc-up-or-down-15-mins-1778321716188"]}]
     let sub_cmd = frame_socketio_event(
         "subscribe_market_prices",
-        &serde_json::json!({"marketSlugs": ["btc-up-or-down-15-mins-1778327111734"]}),
+        &serde_json::json!({"marketSlugs": ["btc-up-or-down-15-mins-1778345111897"]}),
     );
 
     println!("  → Sending subscribe command...");

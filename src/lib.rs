@@ -212,7 +212,6 @@ pub mod prelude {
     pub(crate) use tokio_tungstenite::connect_async;
     pub(crate) use tokio_tungstenite::MaybeTlsStream;
     pub(crate) use tokio_tungstenite::WebSocketStream;
-    pub(crate) use url::Url as WsUrl;
 }
 
 pub use prelude::*;

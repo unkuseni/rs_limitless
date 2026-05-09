@@ -31,6 +31,7 @@
 //! ```
 
 use limitless::prelude::*;
+use limitless::ws::stream::frame_socketio_event;
 use serde_json::Value;
 use std::env;
 use tokio::sync::mpsc;
@@ -246,20 +247,14 @@ async fn mode_public(market_slug: &str, duration_secs: u64) {
     // Wait for connection, then send subscription
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let sub_cmd = serde_json::json!({
-        "type": 2,
-        "data": ["subscribe_market_prices", {"marketSlugs": [market_slug]}]
-    })
-    .to_string();
+    let sub_cmd = frame_socketio_event(
+        "subscribe_market_prices",
+        &serde_json::json!({"marketSlugs": [market_slug]}),
+    );
     println!("→ Subscribing to: subscribe_market_prices for '{market_slug}'\n");
     let _ = cmd_tx.send(sub_cmd);
 
-    // Also subscribe to market lifecycle
-    let lifecycle_cmd = serde_json::json!({
-        "type": 2,
-        "data": ["subscribe_market_lifecycle", {}]
-    })
-    .to_string();
+    let lifecycle_cmd = frame_socketio_event("subscribe_market_lifecycle", &serde_json::json!({}));
     let _ = cmd_tx.send(lifecycle_cmd);
 
     // Run for the specified duration
@@ -333,11 +328,10 @@ async fn mode_orderbook(market_slug: &str, duration_secs: u64) {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let sub_cmd = serde_json::json!({
-        "type": 2,
-        "data": ["subscribe_market_prices", {"marketSlugs": [market_slug]}]
-    })
-    .to_string();
+    let sub_cmd = frame_socketio_event(
+        "subscribe_market_prices",
+        &serde_json::json!({"marketSlugs": [market_slug]}),
+    );
     println!("→ Subscribed.\n");
     let _ = cmd_tx.send(sub_cmd);
 

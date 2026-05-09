@@ -242,12 +242,12 @@ impl Client {
 
     // ── WebSocket connection ──────────────────────────────────────────
 
-    /// Establish a raw WebSocket connection.
+    /// Establish a raw WebSocket connection to the Limitless Socket.IO endpoint.
     ///
-    /// Connects to the WebSocket endpoint and returns a `WebSocketStream`
-    /// ready for reading/writing. The caller is responsible for any
-    /// protocol-level framing (the Limitless WS uses Socket.IO protocol
-    /// over the raw WebSocket transport).
+    /// Connects to `wss://ws.limitless.exchange/socket.io/?EIO=4&transport=websocket`
+    /// and returns a `WebSocketStream` ready for reading/writing. The caller is
+    /// responsible for the Socket.IO protocol framing (Engine.IO open, namespace
+    /// connect, event emit/receive) on top of this stream.
     ///
     /// # Arguments
     ///
@@ -260,12 +260,13 @@ impl Client {
         _authenticated: bool,
         _timeout_secs: Option<u64>,
     ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, LimitlessError> {
-        // The Limitless Exchange WS endpoint uses Socket.IO protocol.
-        // Raw WebSocket connection establishes the transport; the caller
-        // should handle the Socket.IO framing (namespace connect, event
-        // emission/reception) on top of this stream.
-        let ws_url = WsUrl::parse("wss://ws.limitless.exchange/markets")
-            .map_err(|e| LimitlessError::Base(format!("Invalid WS URL: {}", e)))?;
+        // The Limitless Exchange uses Socket.IO (Engine.IO v4) over WebSocket.
+        // The `/markets` path is the Socket.IO namespace, NOT the WebSocket
+        // endpoint. The actual WebSocket endpoint is at:
+        //   /socket.io/?EIO=4&transport=websocket
+        let ws_url =
+            WsUrl::parse("wss://ws.limitless.exchange/socket.io/?EIO=4&transport=websocket")
+                .map_err(|e| LimitlessError::Base(format!("Invalid WS URL: {}", e)))?;
 
         let (stream, _response) = connect_async(ws_url.to_string()).await?;
         Ok(stream)

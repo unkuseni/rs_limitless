@@ -240,6 +240,106 @@ impl Serialize for FlexFloat {
 /// not recognized by the typed dispatch.
 pub type WsEvent = Value;
 
+// ── Typed event dispatch ────────────────────────────────────────────────
+
+/// Typed WebSocket event — wraps all known server-emitted events.
+///
+/// Variants with named structs carry fully deserialized payloads. Variants
+/// that hold raw [`Value`] cover events whose schemas are not yet modelled
+/// (or are intentionally left as flexible key-value maps).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WsEventKind {
+    /// AMM price update (`newPriceData`).
+    NewPriceData(NewPriceData),
+    /// CLOB orderbook snapshot (`orderbookUpdate`).
+    OrderbookUpdate(OrderbookUpdate),
+    /// Oracle price data (`oraclePriceData`).
+    OraclePriceData(OraclePriceData),
+    /// Public trade event (`trades`).
+    TradeEvent(TradeEvent),
+    /// Order status update (`orders`).
+    OrderUpdate(OrderUpdate),
+    /// Fill notification (`fills`).
+    FillEvent(FillEvent),
+    /// Market statistics update (`markets`).
+    MarketUpdateEvent(MarketUpdateEvent),
+    /// On-chain transaction event (`transactions`).
+    TransactionEvent(TransactionEvent),
+    /// Market creation event (`marketCreated`).
+    MarketCreatedEvent(MarketCreatedEvent),
+    /// Market resolution event (`marketResolved`).
+    MarketResolvedEvent(MarketResolvedEvent),
+    /// Portfolio position update — raw payload (`positions`, requires auth).
+    Positions(Value),
+    /// OME state / settlement result — raw payload (`orderEvent`, requires auth).
+    OrderEvent(Value),
+    /// Live sports data — raw payload (`liveSports`).
+    LiveSports(Value),
+    /// Live esports data — raw payload (`liveEsports`).
+    LiveEsports(Value),
+    /// System notification (`system`).
+    System(SystemEvent),
+    /// Authentication confirmation — raw payload (`authenticated`).
+    Authenticated(Value),
+    /// Error notification — raw payload (`exception`).
+    Exception(Value),
+    /// Server error — raw payload (`error`). Emitted for e.g. "All requested markets are resolved".
+    Error(Value),
+    /// Unknown / unrecognized event with its raw payload.
+    Unknown(Value),
+}
+
+/// Map a server-emitted event name and its JSON payload to a typed [`WsEventKind`].
+///
+/// Returns `None` only when the payload fails to deserialize for a known
+/// event type. Unknown event names produce [`WsEventKind::Unknown`].
+pub fn deserialize_event(event: &str, payload: &Value) -> Option<WsEventKind> {
+    match event {
+        "newPriceData" => serde_json::from_value::<NewPriceData>(payload.clone())
+            .ok()
+            .map(WsEventKind::NewPriceData),
+        "orderbookUpdate" => serde_json::from_value::<OrderbookUpdate>(payload.clone())
+            .ok()
+            .map(WsEventKind::OrderbookUpdate),
+        "oraclePriceData" => serde_json::from_value::<OraclePriceData>(payload.clone())
+            .ok()
+            .map(WsEventKind::OraclePriceData),
+        "trades" => serde_json::from_value::<TradeEvent>(payload.clone())
+            .ok()
+            .map(WsEventKind::TradeEvent),
+        "orders" => serde_json::from_value::<OrderUpdate>(payload.clone())
+            .ok()
+            .map(WsEventKind::OrderUpdate),
+        "fills" => serde_json::from_value::<FillEvent>(payload.clone())
+            .ok()
+            .map(WsEventKind::FillEvent),
+        "markets" => serde_json::from_value::<MarketUpdateEvent>(payload.clone())
+            .ok()
+            .map(WsEventKind::MarketUpdateEvent),
+        "transactions" => serde_json::from_value::<TransactionEvent>(payload.clone())
+            .ok()
+            .map(WsEventKind::TransactionEvent),
+        "marketCreated" => serde_json::from_value::<MarketCreatedEvent>(payload.clone())
+            .ok()
+            .map(WsEventKind::MarketCreatedEvent),
+        "marketResolved" => serde_json::from_value::<MarketResolvedEvent>(payload.clone())
+            .ok()
+            .map(WsEventKind::MarketResolvedEvent),
+        "positions" => Some(WsEventKind::Positions(payload.clone())),
+        "orderEvent" => Some(WsEventKind::OrderEvent(payload.clone())),
+        "liveSports" => Some(WsEventKind::LiveSports(payload.clone())),
+        "liveEsports" => Some(WsEventKind::LiveEsports(payload.clone())),
+        "system" => serde_json::from_value::<SystemEvent>(payload.clone())
+            .ok()
+            .map(WsEventKind::System),
+        "authenticated" => Some(WsEventKind::Authenticated(payload.clone())),
+        "exception" => Some(WsEventKind::Exception(payload.clone())),
+        "error" => Some(WsEventKind::Error(payload.clone())),
+        _other => Some(WsEventKind::Unknown(payload.clone())),
+    }
+}
+
 // ── Orderbook ────────────────────────────────────────────────────────────
 
 /// A single level in the orderbook (bid or ask).
@@ -438,6 +538,19 @@ pub struct MarketResolvedEvent {
     pub winning_index: i32,
     #[serde(rename = "resolutionDate")]
     pub resolution_date: String,
+}
+
+/// System notification event (`system`).
+///
+/// Emitted by the server for subscription confirmations and other
+/// informational messages. The `markets` field is present when the
+/// message relates to specific market subscriptions.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SystemEvent {
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub markets: Option<Vec<String>>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

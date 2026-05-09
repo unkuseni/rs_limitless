@@ -168,7 +168,7 @@ mod serde_helpers;
 pub mod signing;
 mod trading;
 mod util;
-mod ws;
+pub mod ws;
 
 /// The prelude module re-exports all commonly used types.
 ///

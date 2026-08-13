@@ -413,13 +413,24 @@ impl Client {
 
         if authenticated {
             if let Some(headers) = self.build_ws_auth_headers()? {
+                use tokio_tungstenite::tungstenite::handshake::client::generate_key;
                 use tokio_tungstenite::tungstenite::http::Request as WsRequest;
-                let mut request = WsRequest::builder().uri(ws_url_str);
+
+                // tungstenite 0.29 does not inject WebSocket handshake headers
+                // when handed a raw `http::Request` — build a complete upgrade
+                // request (key, version, upgrade, host) plus the auth headers.
+                let mut request = WsRequest::builder()
+                    .uri(ws_url_str)
+                    .header("Host", "ws.limitless.exchange")
+                    .header("Connection", "Upgrade")
+                    .header("Upgrade", "websocket")
+                    .header("Sec-WebSocket-Version", "13")
+                    .header("Sec-WebSocket-Key", generate_key());
                 for (name, value) in headers.iter() {
                     request = request.header(name.as_str(), value.as_bytes());
                 }
                 let request = request.body(()).map_err(|e| {
-                    LimitlessError::Base(format!("Failed to build WS request: {}", e))
+                    LimitlessError::Base(format!("Failed to build WS request: {e}"))
                 })?;
                 let (stream, _response) = connect_async(request).await?;
                 return Ok(stream);

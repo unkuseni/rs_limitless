@@ -30,7 +30,9 @@ impl System {
             params.insert("target".into(), v.to_string());
         }
         let request = build_request(&params);
-        self.client.get("maintenance/status", Some(request)).await
+        self.client
+            .get(SystemEndpoint::MaintenanceStatus.as_ref(), Some(request))
+            .await
     }
 }
 

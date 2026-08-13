@@ -19,7 +19,10 @@ impl PartnerAccounts {
     /// scope.
     pub async fn create_sub_account(&self, request_body: &str) -> Result<Value, LimitlessError> {
         self.client
-            .post_signed("profiles/partner-accounts", Some(request_body.to_string()))
+            .post_signed(
+                Partner::CreateSubAccount.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -47,7 +50,7 @@ impl PartnerAccounts {
         }
         let request = build_request(&params);
         self.client
-            .get_signed("profiles/partner-accounts", Some(request))
+            .get_signed(Partner::ListSubAccounts.as_ref(), Some(request))
             .await
     }
 
@@ -56,7 +59,7 @@ impl PartnerAccounts {
     ///
     /// Requires HMAC auth with `account_creation` and `delegated_signing`.
     pub async fn check_allowances(&self, profile_id: &str) -> Result<Value, LimitlessError> {
-        let path = format!("profiles/partner-accounts/{}/allowances", profile_id);
+        let path = Partner::allowances(profile_id);
         self.client.get_signed(&path, None).await
     }
 
@@ -66,7 +69,7 @@ impl PartnerAccounts {
     /// Requires HMAC auth with `account_creation` and `delegated_signing`.
     /// A `409` indicates a retry is already running.
     pub async fn retry_allowances(&self, profile_id: &str) -> Result<Value, LimitlessError> {
-        let path = format!("profiles/partner-accounts/{}/allowances/retry", profile_id);
+        let path = Partner::allowances_retry(profile_id);
         self.client.post_signed(&path, None).await
     }
 }

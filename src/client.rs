@@ -93,10 +93,13 @@ impl Client {
         let full_path = if query_string.is_empty() {
             url_path.to_string()
         } else {
-            format!("{}?{}", url_path, query_string)
+            format!("{url_path}?{query_string}")
         };
 
-        let headers = self.build_signed_headers("GET", &full_path, "")?;
+        // The HMAC canonical message uses the full request path **with a
+        // leading slash** (e.g. `/portfolio/positions?limit=5`), per the
+        // authentication reference.
+        let headers = self.build_signed_headers("GET", &ensure_leading_slash(&full_path), "")?;
         let url = format!("{}/{}", self.host, full_path);
 
         trace!("GET (signed) {}", url);
@@ -112,7 +115,7 @@ impl Client {
         raw_request_body: Option<String>,
     ) -> Result<T, LimitlessError> {
         let body = raw_request_body.unwrap_or_default();
-        let headers = self.build_signed_headers("POST", url_path, &body)?;
+        let headers = self.build_signed_headers("POST", &ensure_leading_slash(url_path), &body)?;
         let url = format!("{}/{}", self.host, url_path);
 
         trace!("POST (signed) {}", url);
@@ -134,7 +137,7 @@ impl Client {
         raw_request_body: Option<String>,
     ) -> Result<T, LimitlessError> {
         let body = raw_request_body.unwrap_or_default();
-        let headers = self.build_signed_headers("PUT", url_path, &body)?;
+        let headers = self.build_signed_headers("PUT", &ensure_leading_slash(url_path), &body)?;
         let url = format!("{}/{}", self.host, url_path);
 
         trace!("PUT (signed) {}", url);
@@ -154,7 +157,7 @@ impl Client {
         &self,
         url_path: &str,
     ) -> Result<T, LimitlessError> {
-        let headers = self.build_signed_headers("DELETE", url_path, "")?;
+        let headers = self.build_signed_headers("DELETE", &ensure_leading_slash(url_path), "")?;
         let url = format!("{}/{}", self.host, url_path);
 
         trace!("DELETE (signed) {}", url);
@@ -487,5 +490,18 @@ impl Client {
         );
 
         Ok(Some(headers))
+    }
+}
+
+/// Ensure the path used in the HMAC canonical message starts with a slash.
+///
+/// The canonical message's path component must be the full request URL path
+/// (e.g. `/orders/all/btc-100k?onBehalfOf=42`), not the pathname without the
+/// leading slash.
+fn ensure_leading_slash(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
     }
 }

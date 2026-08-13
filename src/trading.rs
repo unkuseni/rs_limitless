@@ -35,7 +35,7 @@ impl Trader {
         order_request: &str,
     ) -> Result<CreateOrderResponse, LimitlessError> {
         self.client
-            .post_signed("orders", Some(order_request.to_string()))
+            .post_signed(Trade::CreateOrder.as_ref(), Some(order_request.to_string()))
             .await
     }
 
@@ -48,7 +48,10 @@ impl Trader {
         request_body: &str,
     ) -> Result<OrderStatusBatchResponse, LimitlessError> {
         self.client
-            .post_signed("orders/status/batch", Some(request_body.to_string()))
+            .post_signed(
+                Trade::OrderStatusBatch.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -58,7 +61,10 @@ impl Trader {
         request_body: &str,
     ) -> Result<CancelOrderResponse, LimitlessError> {
         self.client
-            .post_signed("orders/cancel", Some(request_body.to_string()))
+            .post_signed(
+                Trade::CancelCombined.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -68,7 +74,7 @@ impl Trader {
         request_body: &str,
     ) -> Result<CancelBatchResponse, LimitlessError> {
         self.client
-            .post_signed("orders/cancel-batch", Some(request_body.to_string()))
+            .post_signed(Trade::CancelBatch.as_ref(), Some(request_body.to_string()))
             .await
     }
 
@@ -79,7 +85,10 @@ impl Trader {
         request_body: &str,
     ) -> Result<CancelBatchResponse, LimitlessError> {
         self.client
-            .post_signed("orders/batch-cancel", Some(request_body.to_string()))
+            .post_signed(
+                Trade::CancelBatchCombined.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -93,7 +102,10 @@ impl Trader {
         request_body: &str,
     ) -> Result<CancelReplaceResponse, LimitlessError> {
         self.client
-            .post_signed("orders/cancel-replace", Some(request_body.to_string()))
+            .post_signed(
+                Trade::CancelReplace.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -108,7 +120,7 @@ impl Trader {
     ) -> Result<CancelReplaceBatchResponse, LimitlessError> {
         self.client
             .post_signed(
-                "orders/cancel-replace/batch",
+                Trade::CancelReplaceBatch.as_ref(),
                 Some(request_body.to_string()),
             )
             .await
@@ -119,7 +131,7 @@ impl Trader {
         &self,
         order_id: &str,
     ) -> Result<CancelOrderResponse, LimitlessError> {
-        let path = format!("orders/{}", order_id);
+        let path = Trade::cancel_order(order_id);
         self.client.delete_signed(&path).await
     }
 
@@ -128,13 +140,13 @@ impl Trader {
         &self,
         slug: &str,
     ) -> Result<CancelAllResponse, LimitlessError> {
-        let path = format!("orders/all/{}", slug);
+        let path = Trade::cancel_all(slug);
         self.client.delete_signed(&path).await
     }
 
     /// Get the current orderbook for a market.
     pub async fn get_orderbook(&self, slug: &str) -> Result<OrderbookResponse, LimitlessError> {
-        let path = format!("markets/{}/orderbook", slug);
+        let path = Trade::orderbook(slug);
         self.client.get(&path, None).await
     }
 
@@ -149,7 +161,7 @@ impl Trader {
             params.insert("interval".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("markets/{}/historical-price", slug);
+        let path = Trade::historical_price(slug);
         self.client.get(&path, Some(request)).await
     }
 
@@ -158,8 +170,8 @@ impl Trader {
         &self,
         slug: &str,
     ) -> Result<LockedBalanceResponse, LimitlessError> {
-        let path = format!("markets/{}/locked-balance", slug);
-        self.client.get(&path, None).await
+        let path = Trade::locked_balance(slug);
+        self.client.get_signed(&path, None).await
     }
 
     /// Get all orders placed by the authenticated user for a specific market.
@@ -177,8 +189,8 @@ impl Trader {
             params.insert("limit".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("markets/{}/user-orders", slug);
-        self.client.get(&path, Some(request)).await
+        let path = Trade::user_orders(slug);
+        self.client.get_signed(&path, Some(request)).await
     }
 
     /// Get recent market events (trades, orders, liquidity changes).
@@ -196,7 +208,7 @@ impl Trader {
             params.insert("limit".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("markets/{}/events", slug);
+        let path = Trade::market_events(slug);
         self.client.get(&path, Some(request)).await
     }
 
@@ -422,7 +434,7 @@ impl Trader {
 
     /// Resolve the verifying contract for a market slug by fetching market details.
     async fn get_verifying_contract(&self, slug: &str) -> Result<String, LimitlessError> {
-        let market: MarketDetail = self.client.get(&format!("markets/{}", slug), None).await?;
+        let market: MarketDetail = self.client.get(&Market::get(slug), None).await?;
         let venue = market.venue.ok_or_else(|| {
             LimitlessError::ValidationError(format!(
                 "Market '{}' has no venue info — is it a CLOB market?",

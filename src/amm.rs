@@ -19,14 +19,18 @@ impl Amm {
     /// in the collateral token's base units (USDC: `"1000000"` = 1 USDC).
     pub async fn buy(&self, request: &AmmBuyRequest) -> Result<AmmTradeResponse, LimitlessError> {
         let body = serde_json::to_string(request).map_err(LimitlessError::Json)?;
-        self.client.post_signed("amm/buy", Some(body)).await
+        self.client
+            .post_signed(AmmEndpoint::Buy.as_ref(), Some(body))
+            .await
     }
 
     /// Return an exact amount of collateral by selling outcome shares
     /// (`POST /amm/sell`).
     pub async fn sell(&self, request: &AmmSellRequest) -> Result<AmmTradeResponse, LimitlessError> {
         let body = serde_json::to_string(request).map_err(LimitlessError::Json)?;
-        self.client.post_signed("amm/sell", Some(body)).await
+        self.client
+            .post_signed(AmmEndpoint::Sell.as_ref(), Some(body))
+            .await
     }
 
     /// Read the on-chain approval state for a market and side
@@ -40,7 +44,7 @@ impl Amm {
     ) -> Result<AmmAllowanceResponse, LimitlessError> {
         let body = serde_json::to_string(request).map_err(LimitlessError::Json)?;
         self.client
-            .post_signed("amm/allowances/check", Some(body))
+            .post_signed(AmmEndpoint::AllowancesCheck.as_ref(), Some(body))
             .await
     }
 
@@ -56,7 +60,7 @@ impl Amm {
     ) -> Result<AmmAllowanceResponse, LimitlessError> {
         let body = serde_json::to_string(request).map_err(LimitlessError::Json)?;
         self.client
-            .post_signed("amm/allowances/approve", Some(body))
+            .post_signed(AmmEndpoint::AllowancesApprove.as_ref(), Some(body))
             .await
     }
 }

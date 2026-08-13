@@ -43,9 +43,9 @@ impl Markets {
         let request = build_request(&params);
 
         let path = if let Some(cat_id) = category_id {
-            format!("markets/active/{}", cat_id)
+            Market::active_category(cat_id)
         } else {
-            "markets/active".to_string()
+            Market::Active.as_ref().to_string()
         };
 
         self.client.get(&path, Some(request)).await
@@ -53,12 +53,12 @@ impl Markets {
 
     /// Get the count of active markets per category.
     pub async fn get_category_counts(&self) -> Result<CategoryCountResponse, LimitlessError> {
-        self.client.get("markets/categories/count", None).await
+        self.client.get(Market::CategoryCount.as_ref(), None).await
     }
 
     /// Get all active market slugs with metadata (strike price, ticker, deadline).
     pub async fn get_active_slugs(&self) -> Result<Vec<ActiveSlug>, LimitlessError> {
-        self.client.get("markets/active/slugs", None).await
+        self.client.get(Market::ActiveSlugs.as_ref(), None).await
     }
 
     /// Get detailed market information by address or slug.
@@ -66,7 +66,7 @@ impl Markets {
     /// Returns venue data (`exchange` and `adapter` addresses) needed for
     /// EIP-712 order signing on CLOB markets.
     pub async fn get_market(&self, address_or_slug: &str) -> Result<MarketDetail, LimitlessError> {
-        let path = format!("markets/{}", address_or_slug);
+        let path = Market::get(address_or_slug);
         self.client.get(&path, None).await
     }
 
@@ -89,7 +89,7 @@ impl Markets {
             params.insert("to".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("markets/{}/oracle-candles", address_or_slug);
+        let path = Market::oracle_candles(address_or_slug);
         self.client.get(&path, Some(request)).await
     }
 
@@ -108,7 +108,7 @@ impl Markets {
             params.insert("limit".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("markets/{}/get-feed-events", slug);
+        let path = Market::feed_events(slug);
         self.client.get(&path, Some(request)).await
     }
 
@@ -134,7 +134,9 @@ impl Markets {
             params.insert("similarityThreshold".into(), v.to_string());
         }
         let request = build_request(&params);
-        self.client.get("markets/search", Some(request)).await
+        self.client
+            .get(Market::Search.as_ref(), Some(request))
+            .await
     }
 
     /// Get the timeline for a recurring market series, anchored on a slug.
@@ -155,7 +157,7 @@ impl Markets {
             params.insert("after".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("markets/{}/timeline", slug);
+        let path = Market::market_timeline(slug);
         self.client.get(&path, Some(request)).await
     }
 
@@ -187,7 +189,9 @@ impl Markets {
             params.insert("after".into(), v.to_string());
         }
         let request = build_request(&params);
-        self.client.get("markets/timeline", Some(request)).await
+        self.client
+            .get(Market::GlobalTimeline.as_ref(), Some(request))
+            .await
     }
 }
 

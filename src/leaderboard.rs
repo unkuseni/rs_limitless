@@ -36,7 +36,7 @@ impl Leaderboard {
             params.insert("page".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("leaderboard/pnl/unrealized/markets/{}", market_id);
+        let path = LeaderboardEndpoint::unrealized_pnl_market(market_id);
         self.client.get(&path, Some(request)).await
     }
 
@@ -55,7 +55,7 @@ impl Leaderboard {
         let request = build_request(&params);
         self.client
             .get(
-                "leaderboard/pnl/unrealized/biggest-positions",
+                LeaderboardEndpoint::BiggestPositions.as_ref(),
                 Some(request),
             )
             .await

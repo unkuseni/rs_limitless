@@ -31,7 +31,10 @@ impl Portfolio {
         request_body: &str,
     ) -> Result<ProfileResponse, LimitlessError> {
         self.client
-            .put_signed("profiles", Some(request_body.to_string()))
+            .put_signed(
+                PortfolioEndpoint::UpdateProfile.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -57,25 +60,31 @@ impl Portfolio {
     /// including the internal profile `id` (used as `ownerId`) and
     /// `rank.feeRateBps` (used when constructing signed orders).
     pub async fn get_current_profile(&self) -> Result<ProfileResponse, LimitlessError> {
-        self.client.get_signed("profiles/me", None).await
+        self.client
+            .get_signed(PortfolioEndpoint::GetCurrentProfile.as_ref(), None)
+            .await
     }
 
     /// Get your own profile, including internal user `id` and `rank.feeRateBps`.
     ///
     /// The `account` parameter should be your wallet address.
     pub async fn get_profile(&self, account: &str) -> Result<ProfileResponse, LimitlessError> {
-        let path = format!("profiles/{}", account);
-        self.client.get(&path, None).await
+        let path = PortfolioEndpoint::get_profile(account);
+        self.client.get_signed(&path, None).await
     }
 
     /// Retrieve all AMM trades executed by the authenticated user.
     pub async fn get_trades(&self) -> Result<Vec<TradeEntry>, LimitlessError> {
-        self.client.get("portfolio/trades", None).await
+        self.client
+            .get_signed(PortfolioEndpoint::Trades.as_ref(), None)
+            .await
     }
 
     /// Retrieve all active positions with P&L calculations and market values.
     pub async fn get_positions(&self) -> Result<PositionsResponse, LimitlessError> {
-        self.client.get("portfolio/positions", None).await
+        self.client
+            .get_signed(PortfolioEndpoint::Positions.as_ref(), None)
+            .await
     }
 
     /// Get PnL chart data (realised series + current total snapshot).
@@ -88,12 +97,16 @@ impl Portfolio {
             params.insert("timeframe".into(), v.to_string());
         }
         let request = build_request(&params);
-        self.client.get("portfolio/pnl-chart", Some(request)).await
+        self.client
+            .get_signed(PortfolioEndpoint::PnlChart.as_ref(), Some(request))
+            .await
     }
 
     /// Get points breakdown for the authenticated user.
     pub async fn get_points(&self) -> Result<PointsResponse, LimitlessError> {
-        self.client.get("portfolio/points", None).await
+        self.client
+            .get_signed(PortfolioEndpoint::Points.as_ref(), None)
+            .await
     }
 
     /// Get cursor-paginated portfolio history (AMM/CLOB trades, splits, conversions).
@@ -118,7 +131,9 @@ impl Portfolio {
             params.insert("market".into(), v.to_string());
         }
         let request = build_request(&params);
-        self.client.get("portfolio/history", Some(request)).await
+        self.client
+            .get_signed(PortfolioEndpoint::History.as_ref(), Some(request))
+            .await
     }
 
     /// Get another user's trading history (public — no authentication).
@@ -139,7 +154,7 @@ impl Portfolio {
             params.insert("limit".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("portfolio/{}/history", account);
+        let path = PortfolioEndpoint::public_history(account);
         self.client.get(&path, Some(request)).await
     }
 
@@ -151,7 +166,10 @@ impl Portfolio {
     /// `trading` scope when authenticated with an API token.
     pub async fn redeem(&self, request_body: &str) -> Result<Value, LimitlessError> {
         self.client
-            .post_signed("portfolio/redeem", Some(request_body.to_string()))
+            .post_signed(
+                PortfolioEndpoint::Redeem.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -163,7 +181,10 @@ impl Portfolio {
     /// authenticated partner profile.
     pub async fn withdraw(&self, request_body: &str) -> Result<Value, LimitlessError> {
         self.client
-            .post_signed("portfolio/withdraw", Some(request_body.to_string()))
+            .post_signed(
+                PortfolioEndpoint::Withdraw.as_ref(),
+                Some(request_body.to_string()),
+            )
             .await
     }
 
@@ -180,7 +201,7 @@ impl Portfolio {
         self.client
             .post_with_identity(
                 identity_token,
-                "portfolio/withdrawal-addresses",
+                PortfolioEndpoint::AddWithdrawalAddress.as_ref(),
                 Some(request_body.to_string()),
             )
             .await
@@ -195,7 +216,7 @@ impl Portfolio {
         identity_token: &str,
         address: &str,
     ) -> Result<Value, LimitlessError> {
-        let path = format!("portfolio/withdrawal-addresses/{}", address);
+        let path = PortfolioEndpoint::withdrawal_address(address);
         self.client
             .delete_with_identity(identity_token, &path)
             .await
@@ -214,7 +235,7 @@ impl Portfolio {
         }
         let request = build_request(&params);
         self.client
-            .get("portfolio/trading/allowance", Some(request))
+            .get_signed(PortfolioEndpoint::Allowance.as_ref(), Some(request))
             .await
     }
 }

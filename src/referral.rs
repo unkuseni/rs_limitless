@@ -20,7 +20,9 @@ impl Referral {
     /// resolve it as the highest ladder entry whose `min_basis_raw` your
     /// `total_basis_raw` clears (a `custom_tier` pin acts as a floor).
     pub async fn get_my_stats(&self) -> Result<ReferralMeResponse, LimitlessError> {
-        self.client.get_signed("referral/usdc/me", None).await
+        self.client
+            .get_signed(ReferralEndpoint::MyStats.as_ref(), None)
+            .await
     }
 
     /// Get your referred users, paginated/filtered/sorted server-side
@@ -55,7 +57,7 @@ impl Referral {
         }
         let request = build_request(&params);
         self.client
-            .get_signed("referral/usdc/referrals", Some(request))
+            .get_signed(ReferralEndpoint::MyReferrals.as_ref(), Some(request))
             .await
     }
 
@@ -71,7 +73,7 @@ impl Referral {
         sort_order: Option<&str>,
     ) -> Result<ReferralLeaderboardResponse, LimitlessError> {
         self.leaderboard_request(
-            "referral/usdc/leaderboard",
+            ReferralEndpoint::Leaderboard.as_ref(),
             limit,
             offset,
             sort_by,
@@ -92,7 +94,7 @@ impl Referral {
         sort_order: Option<&str>,
     ) -> Result<ReferralLeaderboardResponse, LimitlessError> {
         self.leaderboard_request(
-            "referral/usdc/leaderboard-friends",
+            ReferralEndpoint::FriendsLeaderboard.as_ref(),
             limit,
             offset,
             sort_by,

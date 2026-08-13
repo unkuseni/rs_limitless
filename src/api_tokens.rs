@@ -21,7 +21,7 @@ impl ApiTokens {
     /// token derivation.
     pub async fn get_capabilities(&self, identity_token: &str) -> Result<Value, LimitlessError> {
         self.client
-            .get_with_identity(identity_token, "auth/api-tokens/capabilities", None)
+            .get_with_identity(identity_token, ApiToken::GetCapabilities.as_ref(), None)
             .await
     }
 
@@ -37,7 +37,7 @@ impl ApiTokens {
     ) -> Result<DeriveApiTokenResponse, LimitlessError> {
         let body = serde_json::to_string(request).map_err(LimitlessError::Json)?;
         self.client
-            .post_with_identity(identity_token, "auth/api-tokens/derive", Some(body))
+            .post_with_identity(identity_token, ApiToken::Derive.as_ref(), Some(body))
             .await
     }
 
@@ -45,14 +45,16 @@ impl ApiTokens {
     ///
     /// Requires token management to be enabled for the partner.
     pub async fn list_tokens(&self) -> Result<Value, LimitlessError> {
-        self.client.get_signed("auth/api-tokens", None).await
+        self.client
+            .get_signed(ApiToken::ListActive.as_ref(), None)
+            .await
     }
 
     /// Revoke an active API token (`DELETE /auth/api-tokens/{tokenId}`).
     ///
     /// The token becomes immediately unusable.
     pub async fn revoke_token(&self, token_id: &str) -> Result<Value, LimitlessError> {
-        let path = format!("auth/api-tokens/{}", token_id);
+        let path = ApiToken::revoke(token_id);
         self.client.delete_signed(&path).await
     }
 }

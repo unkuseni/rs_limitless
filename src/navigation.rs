@@ -13,7 +13,7 @@ pub struct Navigation {
 impl Navigation {
     /// Get the full hierarchical navigation tree for market pages.
     pub async fn get_navigation_tree(&self) -> Result<Vec<NavigationNode>, LimitlessError> {
-        self.client.get("navigation", None).await
+        self.client.get(Nav::GetNavigation.as_ref(), None).await
     }
 
     /// Resolve a URL path to a market page configuration.
@@ -24,7 +24,9 @@ impl Navigation {
         let mut params = BTreeMap::new();
         params.insert("path".into(), path.to_string());
         let request = build_request(&params);
-        self.client.get("market-pages/by-path", Some(request)).await
+        self.client
+            .get(Nav::GetPageByPath.as_ref(), Some(request))
+            .await
     }
 
     /// List markets belonging to a specific market page.
@@ -59,18 +61,18 @@ impl Navigation {
             }
         }
         let request = build_request(&params);
-        let path = format!("market-pages/{}/markets", page_id);
+        let path = Nav::page_markets(page_id);
         self.client.get(&path, Some(request)).await
     }
 
     /// List all property keys with their options (sorted by slug).
     pub async fn list_property_keys(&self) -> Result<Vec<PropertyKey>, LimitlessError> {
-        self.client.get("property-keys", None).await
+        self.client.get(Nav::ListPropertyKeys.as_ref(), None).await
     }
 
     /// Get a specific property key by ID, including its options.
     pub async fn get_property_key(&self, key_id: &str) -> Result<PropertyKey, LimitlessError> {
-        let path = format!("property-keys/{}", key_id);
+        let path = Nav::property_key(key_id);
         self.client.get(&path, None).await
     }
 
@@ -85,7 +87,7 @@ impl Navigation {
             params.insert("parentId".into(), v.to_string());
         }
         let request = build_request(&params);
-        let path = format!("property-keys/{}/options", key_id);
+        let path = Nav::property_options(key_id);
         self.client.get(&path, Some(request)).await
     }
 }

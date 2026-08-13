@@ -284,6 +284,34 @@ impl Trader {
             OrderSide::Buy,
             usdc_amount,
             owner_id,
+            None,
+        )
+        .await
+    }
+
+    /// Place a FOK buy market order with an idempotency key.
+    ///
+    /// `client_order_id` (max 128 chars) is echoed back on the response and
+    /// on every `orderEvent` WS frame for the order, so retries and
+    /// reconciliation can be correlated without waiting for the HTTP
+    /// response.
+    pub async fn buy_fok_with_client_order_id(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        usdc_amount: f64,
+        owner_id: u64,
+        client_order_id: &str,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.place_fok_order(
+            private_key,
+            market_slug,
+            token_id,
+            OrderSide::Buy,
+            usdc_amount,
+            owner_id,
+            Some(client_order_id),
         )
         .await
     }
@@ -304,6 +332,32 @@ impl Trader {
             OrderSide::Sell,
             share_amount,
             owner_id,
+            None,
+        )
+        .await
+    }
+
+    /// Place a FOK sell market order with an idempotency key.
+    ///
+    /// See [`buy_fok_with_client_order_id`](Self::buy_fok_with_client_order_id)
+    /// for the semantics of `client_order_id`.
+    pub async fn sell_fok_with_client_order_id(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        share_amount: f64,
+        owner_id: u64,
+        client_order_id: &str,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.place_fok_order(
+            private_key,
+            market_slug,
+            token_id,
+            OrderSide::Sell,
+            share_amount,
+            owner_id,
+            Some(client_order_id),
         )
         .await
     }
@@ -495,6 +549,7 @@ impl Trader {
         side: OrderSide,
         amount: f64,
         owner_id: u64,
+        client_order_id: Option<&str>,
     ) -> Result<CreateOrderResponse, LimitlessError> {
         let verifying_contract = self.get_verifying_contract(market_slug).await?;
         let signer = Eip712Signer::new(private_key, &verifying_contract)
@@ -509,7 +564,7 @@ impl Trader {
             owner_id,
             order_type: OrderType::Fok,
             market_slug: market_slug.to_string(),
-            client_order_id: None,
+            client_order_id: client_order_id.map(|s| s.to_string()),
             on_behalf_of: None,
             post_only: None,
             timestamp: None,

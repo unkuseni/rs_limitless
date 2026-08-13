@@ -21,6 +21,25 @@ pub struct Trader {
     pub client: Client,
 }
 
+/// Optional parameters for order placement.
+///
+/// All fields are optional; `Default` produces the plain behavior
+/// (no idempotency key, not post-only, zero signed fee rate).
+#[derive(Debug, Clone, Default)]
+pub struct OrderOptions {
+    /// Client-supplied idempotency key (max 128 chars). Echoed on the
+    /// response and on every `orderEvent` frame for the order.
+    pub client_order_id: Option<String>,
+    /// Post-only: reject the order if it would match immediately.
+    /// Guarantees maker execution (no taker fee; qualifies for LP
+    /// rewards / maker rebates).
+    pub post_only: bool,
+    /// Fee rate (bps) signed into the order, from the profile's
+    /// `rank.feeRateBps`. Taker fees apply on immediate matches; resting
+    /// maker orders are never charged.
+    pub fee_rate_bps: i32,
+}
+
 impl Trader {
     /// Create a new order on a prediction market.
     ///
@@ -234,6 +253,30 @@ impl Trader {
         size: f64,
         owner_id: u64,
     ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.buy_gtc_opts(
+            private_key,
+            market_slug,
+            token_id,
+            price,
+            size,
+            owner_id,
+            &OrderOptions::default(),
+        )
+        .await
+    }
+
+    /// Place a GTC buy limit order with custom [`OrderOptions`]
+    /// (idempotency key, post-only, fee rate).
+    pub async fn buy_gtc_opts(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        price: f64,
+        size: f64,
+        owner_id: u64,
+        opts: &OrderOptions,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
         self.place_gtc_order(
             private_key,
             market_slug,
@@ -242,6 +285,7 @@ impl Trader {
             price,
             size,
             owner_id,
+            opts,
         )
         .await
     }
@@ -256,6 +300,30 @@ impl Trader {
         size: f64,
         owner_id: u64,
     ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.sell_gtc_opts(
+            private_key,
+            market_slug,
+            token_id,
+            price,
+            size,
+            owner_id,
+            &OrderOptions::default(),
+        )
+        .await
+    }
+
+    /// Place a GTC sell limit order with custom [`OrderOptions`]
+    /// (idempotency key, post-only, fee rate).
+    pub async fn sell_gtc_opts(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        price: f64,
+        size: f64,
+        owner_id: u64,
+        opts: &OrderOptions,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
         self.place_gtc_order(
             private_key,
             market_slug,
@@ -264,6 +332,7 @@ impl Trader {
             price,
             size,
             owner_id,
+            opts,
         )
         .await
     }
@@ -277,6 +346,28 @@ impl Trader {
         usdc_amount: f64,
         owner_id: u64,
     ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.buy_fok_opts(
+            private_key,
+            market_slug,
+            token_id,
+            usdc_amount,
+            owner_id,
+            &OrderOptions::default(),
+        )
+        .await
+    }
+
+    /// Place a FOK buy market order with custom [`OrderOptions`]
+    /// (idempotency key, fee rate).
+    pub async fn buy_fok_opts(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        usdc_amount: f64,
+        owner_id: u64,
+        opts: &OrderOptions,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
         self.place_fok_order(
             private_key,
             market_slug,
@@ -284,7 +375,7 @@ impl Trader {
             OrderSide::Buy,
             usdc_amount,
             owner_id,
-            None,
+            opts,
         )
         .await
     }
@@ -304,14 +395,16 @@ impl Trader {
         owner_id: u64,
         client_order_id: &str,
     ) -> Result<CreateOrderResponse, LimitlessError> {
-        self.place_fok_order(
+        self.buy_fok_opts(
             private_key,
             market_slug,
             token_id,
-            OrderSide::Buy,
             usdc_amount,
             owner_id,
-            Some(client_order_id),
+            &OrderOptions {
+                client_order_id: Some(client_order_id.to_string()),
+                ..Default::default()
+            },
         )
         .await
     }
@@ -325,6 +418,28 @@ impl Trader {
         share_amount: f64,
         owner_id: u64,
     ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.sell_fok_opts(
+            private_key,
+            market_slug,
+            token_id,
+            share_amount,
+            owner_id,
+            &OrderOptions::default(),
+        )
+        .await
+    }
+
+    /// Place a FOK sell market order with custom [`OrderOptions`]
+    /// (idempotency key, fee rate).
+    pub async fn sell_fok_opts(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        share_amount: f64,
+        owner_id: u64,
+        opts: &OrderOptions,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
         self.place_fok_order(
             private_key,
             market_slug,
@@ -332,7 +447,7 @@ impl Trader {
             OrderSide::Sell,
             share_amount,
             owner_id,
-            None,
+            opts,
         )
         .await
     }
@@ -350,14 +465,16 @@ impl Trader {
         owner_id: u64,
         client_order_id: &str,
     ) -> Result<CreateOrderResponse, LimitlessError> {
-        self.place_fok_order(
+        self.sell_fok_opts(
             private_key,
             market_slug,
             token_id,
-            OrderSide::Sell,
             share_amount,
             owner_id,
-            Some(client_order_id),
+            &OrderOptions {
+                client_order_id: Some(client_order_id.to_string()),
+                ..Default::default()
+            },
         )
         .await
     }
@@ -507,6 +624,7 @@ impl Trader {
         price: f64,
         size: f64,
         owner_id: u64,
+        opts: &OrderOptions,
     ) -> Result<CreateOrderResponse, LimitlessError> {
         let verifying_contract = self.get_verifying_contract(market_slug).await?;
         let signer = Eip712Signer::new(private_key, &verifying_contract)
@@ -519,7 +637,7 @@ impl Trader {
                 side,
                 price,
                 size,
-                0, // fee_rate_bps — use default
+                opts.fee_rate_bps,
             )
             .map_err(LimitlessError::ValidationError)?;
 
@@ -528,9 +646,9 @@ impl Trader {
             owner_id,
             order_type: OrderType::Gtc,
             market_slug: market_slug.to_string(),
-            client_order_id: None,
+            client_order_id: opts.client_order_id.clone(),
             on_behalf_of: None,
-            post_only: None,
+            post_only: opts.post_only.then_some(true),
             timestamp: None,
             recv_window: None,
             stp_policy: None,
@@ -549,14 +667,20 @@ impl Trader {
         side: OrderSide,
         amount: f64,
         owner_id: u64,
-        client_order_id: Option<&str>,
+        opts: &OrderOptions,
     ) -> Result<CreateOrderResponse, LimitlessError> {
         let verifying_contract = self.get_verifying_contract(market_slug).await?;
         let signer = Eip712Signer::new(private_key, &verifying_contract)
             .map_err(LimitlessError::ValidationError)?;
 
         let order_data = signer
-            .build_fok_order(&signer.wallet_address(), token_id, side, amount, 0)
+            .build_fok_order(
+                &signer.wallet_address(),
+                token_id,
+                side,
+                amount,
+                opts.fee_rate_bps,
+            )
             .map_err(LimitlessError::ValidationError)?;
 
         let request = CreateOrderRequest {
@@ -564,9 +688,9 @@ impl Trader {
             owner_id,
             order_type: OrderType::Fok,
             market_slug: market_slug.to_string(),
-            client_order_id: client_order_id.map(|s| s.to_string()),
+            client_order_id: opts.client_order_id.clone(),
             on_behalf_of: None,
-            post_only: None,
+            post_only: opts.post_only.then_some(true),
             timestamp: None,
             recv_window: None,
             stp_policy: None,

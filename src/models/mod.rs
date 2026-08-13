@@ -13,6 +13,7 @@
 
 pub mod order;
 
+use crate::ws::FlexFloat;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -275,6 +276,65 @@ pub struct CreateOrderResponse {
     pub order: CreatedOrderInfo,
     #[serde(rename = "makerMatches", default)]
     pub maker_matches: Vec<MakerMatchInfo>,
+    /// Execution and settlement summary (matching result, fees, totals).
+    #[serde(default)]
+    pub execution: Option<OrderExecutionInfo>,
+}
+
+/// Execution and settlement summary for a created order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderExecutionInfo {
+    /// Whether the order was matched immediately.
+    #[serde(default)]
+    pub matched: Option<bool>,
+    /// `UNMATCHED`, `MATCHED`, `MINED`, `CONFIRMED`, `RETRYING`, `FAILED`,
+    /// `DELAYED` (taker delay), or `CANCELED` (self-trade prevention).
+    #[serde(rename = "settlementStatus", default)]
+    pub settlement_status: Option<String>,
+    /// Reason the order was canceled (e.g. `STP_TAKER_REJECTED`).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// ISO-8601 time a delayed order is released to the matching engine.
+    #[serde(rename = "eligibleAt", default)]
+    pub eligible_at: Option<String>,
+    /// Trade event ID (present when matched).
+    #[serde(rename = "tradeEventId", default)]
+    pub trade_event_id: Option<String>,
+    /// On-chain transaction hash (present when mined).
+    #[serde(rename = "txHash", default)]
+    pub tx_hash: Option<String>,
+    /// Echo of the client-provided idempotency key.
+    #[serde(rename = "clientOrderId", default)]
+    pub client_order_id: Option<String>,
+    /// Resting order IDs canceled by self-trade prevention.
+    #[serde(rename = "stpMakerCancels", default)]
+    pub stp_maker_cancels: Option<Vec<String>>,
+    /// Fee rate in basis points applied to this order.
+    #[serde(rename = "feeRateBps", default)]
+    pub fee_rate_bps: Option<f64>,
+    /// Effective fee rate in basis points after rebates.
+    #[serde(rename = "effectiveFeeBps", default)]
+    pub effective_fee_bps: Option<f64>,
+    /// Raw execution totals in contract units.
+    #[serde(rename = "totalsRaw", default)]
+    pub totals_raw: Option<OrderExecutionTotalsRaw>,
+}
+
+/// Raw execution totals in contract units (decimal strings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderExecutionTotalsRaw {
+    #[serde(rename = "contractsGross", default)]
+    pub contracts_gross: Option<String>,
+    #[serde(rename = "contractsFee", default)]
+    pub contracts_fee: Option<String>,
+    #[serde(rename = "contractsNet", default)]
+    pub contracts_net: Option<String>,
+    #[serde(rename = "usdGross", default)]
+    pub usd_gross: Option<String>,
+    #[serde(rename = "usdFee", default)]
+    pub usd_fee: Option<String>,
+    #[serde(rename = "usdNet", default)]
+    pub usd_net: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,12 +359,14 @@ pub struct CreatedOrderInfo {
     pub side: Value,
     #[serde(rename = "feeRateBps")]
     pub fee_rate_bps: i32,
-    pub nonce: i32,
+    #[serde(default)]
+    pub nonce: Option<FlexFloat>,
     pub signature: String,
     #[serde(rename = "orderType")]
     pub order_type: String,
+    /// Order price (decimal string on the wire, 0.01–0.99).
     #[serde(default)]
-    pub price: Option<f64>,
+    pub price: Option<FlexFloat>,
     #[serde(rename = "marketId")]
     pub market_id: i32,
     #[serde(default)]
@@ -338,6 +400,70 @@ pub struct CancelOrderResponse {
 
 /// Response from `POST /orders/cancel-batch`.
 pub type CancelBatchResponse = Value;
+
+// ── Cancel-and-replace ──
+
+/// Outcome of a cancel-and-replace operation (cancellation + replacement
+/// have independent results).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplaceResponse {
+    pub cancel: CancelReplaceCancelResult,
+    pub replacement: CancelReplacePlacementResult,
+}
+
+/// Result of the cancellation leg.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplaceCancelResult {
+    /// `SUCCESS`, `FAILURE`, or `UNKNOWN`.
+    pub status: String,
+    /// Internal order ID of the canceled order (on success).
+    #[serde(rename = "orderId", default)]
+    pub order_id: Option<String>,
+    /// Client-provided order ID of the canceled order (on success).
+    #[serde(rename = "clientOrderId", default)]
+    pub client_order_id: Option<String>,
+    /// Error details when the cancellation failed.
+    #[serde(default)]
+    pub error: Option<CancelReplaceErrorInfo>,
+}
+
+/// Result of the replacement leg.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplacePlacementResult {
+    /// `SUCCESS`, `FAILURE`, `UNKNOWN`, or `NOT_ATTEMPTED`.
+    pub status: String,
+    /// Order response data when the replacement succeeded.
+    #[serde(default)]
+    pub data: Option<CreateOrderResponse>,
+    /// Error details when the replacement failed.
+    #[serde(default)]
+    pub error: Option<CancelReplaceErrorInfo>,
+}
+
+/// Machine-readable error for a cancel-replace leg.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplaceErrorInfo {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Response from `POST /orders/cancel-replace/batch`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplaceBatchResponse {
+    /// Outcomes in input order; each item carries its zero-based input index.
+    pub results: Vec<CancelReplaceBatchItem>,
+}
+
+/// One operation outcome within a cancel-replace batch response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplaceBatchItem {
+    /// Zero-based input operation index.
+    pub index: u64,
+    pub cancel: CancelReplaceCancelResult,
+    pub replacement: CancelReplacePlacementResult,
+}
 
 /// Response from `DELETE /orders/all/:slug`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,12 +540,13 @@ pub struct UserOrderInfo {
     pub side: Value,
     #[serde(rename = "feeRateBps")]
     pub fee_rate_bps: i32,
-    pub nonce: i32,
+    #[serde(default)]
+    pub nonce: Option<FlexFloat>,
     pub signature: String,
     #[serde(rename = "orderType")]
     pub order_type: String,
     #[serde(default)]
-    pub price: Option<f64>,
+    pub price: Option<FlexFloat>,
     #[serde(rename = "marketId")]
     pub market_id: i32,
     #[serde(default)]
@@ -672,8 +799,10 @@ pub struct PointsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryResponse {
     pub data: Vec<HistoryEntry>,
-    #[serde(rename = "nextCursor")]
+    #[serde(rename = "nextCursor", default)]
     pub next_cursor: Option<String>,
+    #[serde(rename = "totalCount", default)]
+    pub total_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -696,6 +825,18 @@ pub struct HistoryEntry {
     pub strategy: Option<String>,
     #[serde(rename = "transactionHash", default)]
     pub transaction_hash: Option<String>,
+    /// Operation kind for CLOB rows (`buy`, `sell`, …).
+    #[serde(default)]
+    pub operation: Option<String>,
+    /// Trade event ID reconciling a CLOB row back to the trade that produced it.
+    #[serde(rename = "tradeEventId", default)]
+    pub trade_event_id: Option<String>,
+    /// Internal order ID for CLOB-sourced rows.
+    #[serde(rename = "orderId", default)]
+    pub order_id: Option<String>,
+    /// Maker match ID for CLOB-sourced rows.
+    #[serde(rename = "makerMatchId", default)]
+    pub maker_match_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -872,8 +1013,10 @@ pub struct OmeEvent {
     pub source: String,
     #[serde(rename = "type")]
     pub event_type: String,
+    /// Monotonic OME event id (number for lifecycle frames, `terminal:<id>`
+    /// string for FAK/FOK `EXECUTION` frames).
     #[serde(rename = "eventId")]
-    pub event_id: u64,
+    pub event_id: Value,
     #[serde(rename = "orderId")]
     pub order_id: String,
     #[serde(rename = "clientOrderId")]
@@ -884,10 +1027,29 @@ pub struct OmeEvent {
     pub market_id: String,
     pub token: String,
     pub side: String,
-    pub price: String,
+    /// Limit price — a JSON number on OME lifecycle frames.
+    pub price: FlexFloat,
+    /// Size remaining on the book — a JSON number on OME lifecycle frames.
     #[serde(rename = "remainingSize")]
-    pub remaining_size: String,
+    pub remaining_size: FlexFloat,
+    /// Terminal outcome on `EXECUTION` frames (`FILLED`,
+    /// `PARTIALLY_FILLED`, or `KILLED`).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Engine cancellation reason (e.g. `STP_MAKER_CANCELLED`).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Deprecated legacy timestamp — kept for backward compatibility.
     pub timestamp: String,
+    /// Lifecycle fact time (source transition time on OME frames).
+    #[serde(rename = "occurredAt", default)]
+    pub occurred_at: Option<String>,
+    /// Persisted match time from the trade record (settlement frames).
+    #[serde(rename = "matchedAt", default)]
+    pub matched_at: Option<String>,
+    /// Per-client gateway queue time.
+    #[serde(rename = "publishedAt", default)]
+    pub published_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -897,23 +1059,65 @@ pub struct SettlementEvent {
     pub event_type: String,
     #[serde(rename = "eventId")]
     pub event_id: String,
-    #[serde(rename = "orderId")]
+    /// Trade id shared by the provisional `MATCHED` and the terminal
+    /// `MINED` / `FAILED` for this fill.
+    #[serde(rename = "tradeEventId", default)]
+    pub trade_event_id: Option<String>,
+    #[serde(rename = "orderId", default)]
     pub order_id: Option<String>,
-    #[serde(rename = "clientOrderId")]
+    #[serde(rename = "clientOrderId", default)]
     pub client_order_id: Option<String>,
-    #[serde(rename = "userId")]
-    pub user_id: u64,
-    #[serde(rename = "takerOrderId")]
+    /// Internal user id of the recipient (absent on provisional `MATCHED` frames).
+    #[serde(rename = "userId", default)]
+    pub user_id: Option<u64>,
+    #[serde(rename = "takerOrderId", default)]
     pub taker_order_id: Option<String>,
-    #[serde(rename = "takerAccount")]
+    #[serde(rename = "takerAccount", default)]
     pub taker_account: Option<String>,
-    #[serde(rename = "makerMatches")]
+    #[serde(rename = "makerMatches", default)]
     pub maker_matches: Option<Vec<MakerMatch>>,
-    #[serde(rename = "marketSlug")]
+    #[serde(rename = "marketSlug", default)]
     pub market_slug: Option<String>,
-    #[serde(rename = "txHash")]
+    /// CTF token id of the recipient's own side.
+    #[serde(rename = "tokenId", default)]
+    pub token_id: Option<String>,
+    /// Recipient order side (`BUY` / `SELL`).
+    #[serde(default)]
+    pub side: Option<String>,
+    /// Fill price as a decimal string.
+    #[serde(default)]
+    pub price: Option<String>,
+    #[serde(rename = "amountContracts", default)]
+    pub amount_contracts: Option<String>,
+    #[serde(rename = "amountCollateral", default)]
+    pub amount_collateral: Option<String>,
+    #[serde(rename = "configuredFeeRateBps", default)]
+    pub configured_fee_rate_bps: Option<i64>,
+    #[serde(rename = "effectiveFeeBps", default)]
+    pub effective_fee_bps: Option<i64>,
+    /// Fee estimate in contracts (BUY fills).
+    #[serde(rename = "feeAmountContracts", default)]
+    pub fee_amount_contracts: Option<String>,
+    /// Fee estimate in collateral (SELL fills).
+    #[serde(rename = "feeAmountCollateral", default)]
+    pub fee_amount_collateral: Option<String>,
+    /// `true` on provisional `MATCHED` frames — fee fields are estimates.
+    #[serde(rename = "isEstimate", default)]
+    pub is_estimate: Option<bool>,
+    #[serde(rename = "txHash", default)]
     pub tx_hash: Option<String>,
+    /// Deprecated legacy timestamp — always the match time on settlement frames.
     pub timestamp: String,
+    /// Lifecycle fact time (match time on `MATCHED`, terminal decision time
+    /// on `MINED` / `FAILED`).
+    #[serde(rename = "occurredAt", default)]
+    pub occurred_at: Option<String>,
+    /// Persisted match time from the trade record.
+    #[serde(rename = "matchedAt", default)]
+    pub matched_at: Option<String>,
+    /// Per-client gateway queue time.
+    #[serde(rename = "publishedAt", default)]
+    pub published_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -924,6 +1128,907 @@ pub struct MakerMatch {
     #[serde(rename = "matchedSize")]
     pub matched_size: String,
     pub price: String,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AMM trading (server wallets)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Request body for `POST /amm/buy`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmmBuyRequest {
+    /// Market slug or checksummed FPMM address.
+    pub market: String,
+    /// `0` = YES, `1` = NO.
+    #[serde(rename = "outcomeIndex")]
+    pub outcome_index: u8,
+    /// Collateral base units to spend (positive integer string).
+    #[serde(rename = "collateralAmount")]
+    pub collateral_amount: String,
+    /// Slippage tolerance in basis points. Default 100, max 1000.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "slippageBps")]
+    pub slippage_bps: Option<u32>,
+    /// Partner-provided idempotency key (max 128 chars).
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: String,
+    /// Server-wallet sub-account profile ID (partner flow).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
+    pub on_behalf_of: Option<u64>,
+}
+
+/// Request body for `POST /amm/sell`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmmSellRequest {
+    /// Market slug or checksummed FPMM address.
+    pub market: String,
+    /// `0` = YES, `1` = NO.
+    #[serde(rename = "outcomeIndex")]
+    pub outcome_index: u8,
+    /// Collateral base units to receive (positive integer string).
+    #[serde(rename = "collateralReturnAmount")]
+    pub collateral_return_amount: String,
+    /// Slippage tolerance in basis points. Default 100, max 1000.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "slippageBps")]
+    pub slippage_bps: Option<u32>,
+    /// Partner-provided idempotency key (max 128 chars).
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: String,
+    /// Server-wallet sub-account profile ID (partner flow).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
+    pub on_behalf_of: Option<u64>,
+}
+
+/// Submission result for `POST /amm/buy` / `POST /amm/sell`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmmTradeResponse {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub market: Option<String>,
+    #[serde(rename = "outcomeIndex", default)]
+    pub outcome_index: Option<u8>,
+    #[serde(rename = "collateralAmount", default)]
+    pub collateral_amount: Option<String>,
+    #[serde(rename = "collateralReturnAmount", default)]
+    pub collateral_return_amount: Option<String>,
+    #[serde(rename = "expectedShares", default)]
+    pub expected_shares: Option<String>,
+    #[serde(rename = "minShares", default)]
+    pub min_shares: Option<String>,
+    #[serde(rename = "maxShares", default)]
+    pub max_shares: Option<String>,
+    #[serde(rename = "transactionId", default)]
+    pub transaction_id: Option<String>,
+    #[serde(rename = "userOperationHash", default)]
+    pub user_operation_hash: Option<String>,
+    #[serde(rename = "txHash", default)]
+    pub tx_hash: Option<String>,
+}
+
+/// Request body for `POST /amm/allowances/check` and
+/// `POST /amm/allowances/approve`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmmAllowanceRequest {
+    /// Market slug or checksummed FPMM address.
+    pub market: String,
+    /// `BUY` (ERC20 collateral approval) or `SELL` (ERC1155 operator).
+    pub side: String,
+    /// Server-wallet sub-account profile ID (partner flow).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
+    pub on_behalf_of: Option<u64>,
+}
+
+/// On-chain approval state for an AMM market and side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmmAllowanceResponse {
+    /// `confirmed` when at or above the ready threshold, otherwise `missing`
+    /// (or `submitted` immediately after an approval submission).
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub confirmed: Option<bool>,
+    #[serde(default)]
+    pub market: Option<String>,
+    #[serde(rename = "marketAddress", default)]
+    pub market_address: Option<String>,
+    #[serde(default)]
+    pub side: Option<String>,
+    #[serde(rename = "walletAddress", default)]
+    pub wallet_address: Option<String>,
+    #[serde(rename = "tokenAddress", default)]
+    pub token_address: Option<String>,
+    #[serde(rename = "spenderOrOperator", default)]
+    pub spender_or_operator: Option<String>,
+    #[serde(rename = "currentAllowance", default)]
+    pub current_allowance: Option<String>,
+    #[serde(rename = "isApprovedForAll", default)]
+    pub is_approved_for_all: Option<bool>,
+    #[serde(rename = "transactionId", default)]
+    pub transaction_id: Option<String>,
+    #[serde(rename = "userOperationHash", default)]
+    pub user_operation_hash: Option<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Market timeline
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A single slot in a recurring market series.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineSlot {
+    #[serde(rename = "slotId", default)]
+    pub slot_id: Option<i64>,
+    /// Slot offset from the anchor (`batch` entries only).
+    #[serde(default)]
+    pub index: Option<i64>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// `PRE_OPEN`, `OPEN`, `SETTLING`, `SETTLED`, or `FAILED`.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Whether orders are currently accepted for this slot.
+    #[serde(default)]
+    pub tradable: Option<bool>,
+    #[serde(rename = "startAt", default)]
+    pub start_at: Option<String>,
+    #[serde(rename = "endAt", default)]
+    pub end_at: Option<String>,
+    #[serde(rename = "countdownSec", default)]
+    pub countdown_sec: Option<i64>,
+}
+
+/// Response from `GET /markets/{slug}/timeline` and `GET /markets/timeline`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketTimelineResponse {
+    /// The current open slot (or nearest slot when none is open).
+    #[serde(default)]
+    pub current: Option<TimelineSlot>,
+    /// The next slot after the current one.
+    #[serde(default)]
+    pub next: Option<TimelineSlot>,
+    /// The full batch of slots around the anchor.
+    #[serde(default)]
+    pub batch: Vec<TimelineSlot>,
+    /// Recurring-series anchor metadata (slug-anchored variant only).
+    #[serde(default)]
+    pub anchor: Option<Value>,
+    /// Recurring-series job metadata (slug-anchored variant only).
+    #[serde(default)]
+    pub job: Option<Value>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Maintenance status
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Response from `GET /maintenance/status`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceStatus {
+    /// Maintenance effects currently in force.
+    #[serde(default)]
+    pub active: Vec<MaintenanceWindow>,
+    /// Future maintenance notices.
+    #[serde(default)]
+    pub scheduled: Vec<MaintenanceWindow>,
+}
+
+/// A maintenance window or notice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceWindow {
+    #[serde(rename = "startsAt", default)]
+    pub starts_at: Option<String>,
+    #[serde(rename = "endsAt", default)]
+    pub ends_at: Option<String>,
+    #[serde(rename = "publicMessage", default)]
+    pub public_message: Option<String>,
+    #[serde(default)]
+    pub effects: Vec<MaintenanceEffect>,
+}
+
+/// A public effect clients should apply during maintenance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceEffect {
+    /// The public API surface affected (`trading`).
+    #[serde(default)]
+    pub target: Option<String>,
+    /// `post_only`, `cancel_only`, or `disabled`.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Partner accounts
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Response from `GET /profiles/partner-accounts`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPartnerAccountsResponse {
+    #[serde(default)]
+    pub data: Vec<PartnerAccountListItem>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub page: Option<i64>,
+    #[serde(rename = "hasMore", default)]
+    pub has_more: Option<bool>,
+}
+
+/// A partner-owned sub-account entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartnerAccountListItem {
+    #[serde(rename = "profileId", default)]
+    pub profile_id: Option<i64>,
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Referral
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Response from `GET /referral/usdc/me`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralMeResponse {
+    /// Pinned minimum tier name (acts as a floor when present).
+    #[serde(rename = "customTier", default)]
+    pub custom_tier: Option<String>,
+    /// The active tier ladder, ascending.
+    #[serde(default)]
+    pub tiers: Vec<ReferralTierEntry>,
+    /// Own CLOB trading volume (raw USDC, 6 decimals, string).
+    #[serde(rename = "totalBasisRaw", default)]
+    pub total_basis_raw: Option<String>,
+    /// Total USDC earned from the referral program (raw, string).
+    #[serde(rename = "totalEarnedRaw", default)]
+    pub total_earned_raw: Option<String>,
+}
+
+/// One rung of the referral tier ladder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralTierEntry {
+    /// Trading volume required to reach this tier (raw USDC, string).
+    #[serde(rename = "minBasisRaw", default)]
+    pub min_basis_raw: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Referral rate as a decimal fraction (0.18 = 18%).
+    #[serde(default)]
+    pub rate: Option<String>,
+}
+
+/// Response from `GET /referral/usdc/referrals`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralReferralsResponse {
+    #[serde(default)]
+    pub counts: Option<ReferralCounts>,
+    #[serde(default)]
+    pub entries: Vec<ReferralReferralEntry>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+    #[serde(default)]
+    pub total: Option<i64>,
+}
+
+/// Referral counts across all referred users regardless of the active filter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralCounts {
+    #[serde(default)]
+    pub all: Option<i64>,
+    #[serde(default)]
+    pub awaiting: Option<i64>,
+    #[serde(default)]
+    pub earning: Option<i64>,
+}
+
+/// A referred user entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralReferralEntry {
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(rename = "avatarAccount", default)]
+    pub avatar_account: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: Option<String>,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    #[serde(rename = "earnedRaw", default)]
+    pub earned_raw: Option<String>,
+    #[serde(rename = "feesGeneratedRaw", default)]
+    pub fees_generated_raw: Option<String>,
+    #[serde(rename = "pfpUrl", default)]
+    pub pfp_url: Option<String>,
+    #[serde(rename = "referredProfileId", default)]
+    pub referred_profile_id: Option<i64>,
+    #[serde(rename = "volumeRaw", default)]
+    pub volume_raw: Option<String>,
+}
+
+/// Response from `GET /referral/usdc/leaderboard` and
+/// `GET /referral/usdc/leaderboard-friends`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralLeaderboardResponse {
+    #[serde(default)]
+    pub entries: Vec<ReferralLeaderboardEntry>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// Your own rank and entry (global board only, authenticated requests).
+    #[serde(default)]
+    pub me: Option<ReferralLeaderboardMe>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+    #[serde(default)]
+    pub total: Option<i64>,
+}
+
+/// A referral leaderboard row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralLeaderboardEntry {
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(rename = "avatarAccount", default)]
+    pub avatar_account: Option<String>,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    #[serde(rename = "earnedRaw", default)]
+    pub earned_raw: Option<String>,
+    #[serde(rename = "feesGeneratedRaw", default)]
+    pub fees_generated_raw: Option<String>,
+    #[serde(rename = "pfpUrl", default)]
+    pub pfp_url: Option<String>,
+    #[serde(default)]
+    pub rank: Option<i64>,
+    #[serde(rename = "referredCount", default)]
+    pub referred_count: Option<i64>,
+    #[serde(rename = "referrerProfileId", default)]
+    pub referrer_profile_id: Option<i64>,
+}
+
+/// The authenticated caller's pinned rank and entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferralLeaderboardMe {
+    #[serde(default)]
+    pub entry: Option<ReferralLeaderboardEntry>,
+    #[serde(default)]
+    pub rank: Option<i64>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Unrealized PnL leaderboards
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Readiness of the underlying leaderboard projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum UnrealizedPnlSnapshotState {
+    Building,
+    Degraded,
+    Ready,
+    Stale,
+}
+
+/// Numeric amount rendered as a raw integer string plus a formatted decimal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlAmountValue {
+    #[serde(default)]
+    pub raw: Option<String>,
+    #[serde(default)]
+    pub formatted: Option<String>,
+}
+
+/// Money amount in the market's collateral with an optional USD value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlMoneyValue {
+    #[serde(default)]
+    pub raw: Option<String>,
+    #[serde(default)]
+    pub formatted: Option<String>,
+    #[serde(default)]
+    pub usd: Option<String>,
+}
+
+/// Mark price used to value an open position.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlMarkValue {
+    #[serde(default)]
+    pub raw: Option<String>,
+    #[serde(default)]
+    pub formatted: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(rename = "asOf", default)]
+    pub as_of: Option<String>,
+}
+
+/// Collateral token descriptor on leaderboard responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlCollateralToken {
+    #[serde(default)]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub decimals: Option<i32>,
+    #[serde(rename = "priceOracleId", default)]
+    pub price_oracle_id: Option<String>,
+}
+
+/// Market identity pinned to a biggest-positions row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlMarketIdentity {
+    #[serde(default)]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+}
+
+/// Response from `GET /leaderboard/pnl/unrealized/markets/{marketId}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlMarketResponse {
+    #[serde(rename = "schemaVersion", default)]
+    pub schema_version: Option<i32>,
+    pub state: Option<UnrealizedPnlSnapshotState>,
+    #[serde(rename = "projectionVersion", default)]
+    pub projection_version: Option<String>,
+    #[serde(rename = "scopeVersion", default)]
+    pub scope_version: Option<String>,
+    #[serde(rename = "presentationVersion", default)]
+    pub presentation_version: Option<String>,
+    #[serde(rename = "asOf", default)]
+    pub as_of: Option<String>,
+    #[serde(rename = "markAsOf", default)]
+    pub mark_as_of: Option<String>,
+    #[serde(rename = "staleReason", default)]
+    pub stale_reason: Option<String>,
+    #[serde(rename = "collateralToken", default)]
+    pub collateral_token: Option<UnrealizedPnlCollateralToken>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(rename = "marketId", default)]
+    pub market_id: Option<i64>,
+    #[serde(default)]
+    pub metric: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub page: Option<i64>,
+    #[serde(rename = "totalRows", default)]
+    pub total_rows: Option<i64>,
+    #[serde(rename = "totalPages", default)]
+    pub total_pages: Option<i64>,
+    #[serde(default)]
+    pub data: Vec<UnrealizedPnlMarketEntry>,
+}
+
+/// A single ranked row on the market-scoped Unrealized PnL leaderboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlMarketEntry {
+    #[serde(default)]
+    pub rank: Option<i64>,
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    #[serde(rename = "pfpUrl", default)]
+    pub pfp_url: Option<String>,
+    #[serde(default)]
+    pub side: Option<String>,
+    #[serde(rename = "outcomeLabel", default)]
+    pub outcome_label: Option<String>,
+    #[serde(rename = "heldShares", default)]
+    pub held_shares: Option<UnrealizedPnlAmountValue>,
+    #[serde(rename = "avgEntry", default)]
+    pub avg_entry: Option<UnrealizedPnlAmountValue>,
+    #[serde(rename = "costBasis", default)]
+    pub cost_basis: Option<UnrealizedPnlMoneyValue>,
+    #[serde(default)]
+    pub mark: Option<UnrealizedPnlMarkValue>,
+    #[serde(rename = "marketValue", default)]
+    pub market_value: Option<UnrealizedPnlMoneyValue>,
+    #[serde(rename = "unrealizedPnl", default)]
+    pub unrealized_pnl: Option<UnrealizedPnlMoneyValue>,
+    #[serde(rename = "unrealizedRoi", default)]
+    pub unrealized_roi: Option<f64>,
+}
+
+/// Response from `GET /leaderboard/pnl/unrealized/biggest-positions`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlBiggestPositionsResponse {
+    #[serde(rename = "schemaVersion", default)]
+    pub schema_version: Option<i32>,
+    pub state: Option<UnrealizedPnlSnapshotState>,
+    #[serde(rename = "projectionVersion", default)]
+    pub projection_version: Option<String>,
+    #[serde(rename = "scopeVersion", default)]
+    pub scope_version: Option<String>,
+    #[serde(rename = "presentationVersion", default)]
+    pub presentation_version: Option<String>,
+    #[serde(rename = "asOf", default)]
+    pub as_of: Option<String>,
+    #[serde(rename = "markAsOf", default)]
+    pub mark_as_of: Option<String>,
+    #[serde(rename = "staleReason", default)]
+    pub stale_reason: Option<String>,
+    #[serde(rename = "collateralToken", default)]
+    pub collateral_token: Option<UnrealizedPnlCollateralToken>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub data: Vec<UnrealizedPnlBiggestPositionEntry>,
+}
+
+/// A single row on the biggest-open-positions leaderboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrealizedPnlBiggestPositionEntry {
+    #[serde(default)]
+    pub rank: Option<i64>,
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    #[serde(rename = "pfpUrl", default)]
+    pub pfp_url: Option<String>,
+    #[serde(rename = "positionSize", default)]
+    pub position_size: Option<UnrealizedPnlMoneyValue>,
+    #[serde(rename = "heldShares", default)]
+    pub held_shares: Option<UnrealizedPnlAmountValue>,
+    #[serde(rename = "toWin", default)]
+    pub to_win: Option<UnrealizedPnlMoneyValue>,
+    #[serde(default)]
+    pub mark: Option<UnrealizedPnlMarkValue>,
+    #[serde(rename = "unrealizedPnl", default)]
+    pub unrealized_pnl: Option<UnrealizedPnlMoneyValue>,
+    #[serde(default)]
+    pub side: Option<String>,
+    #[serde(rename = "outcomeLabel", default)]
+    pub outcome_label: Option<String>,
+    #[serde(default)]
+    pub market: Option<UnrealizedPnlMarketIdentity>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Server-wallet portfolio operations
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Request body for `POST /portfolio/redeem`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedeemRequest {
+    /// CTF condition id (`bytes32` hex string).
+    #[serde(rename = "conditionId")]
+    pub condition_id: String,
+    /// Managed sub-account profile id (partner flow).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
+    pub on_behalf_of: Option<u64>,
+}
+
+/// Request body for `POST /portfolio/withdraw`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawRequest {
+    /// Token amount in smallest unit (USDC: 1_000_000 = 1 USDC).
+    pub amount: String,
+    /// ERC20 token address (defaults to USDC when omitted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Managed sub-account profile id (partner flow).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
+    pub on_behalf_of: Option<u64>,
+    /// Explicit destination address (must be allowlisted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+}
+
+/// Response from `POST /portfolio/withdrawal-addresses`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawalAddressResponse {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(rename = "profileId", default)]
+    pub profile_id: Option<i64>,
+    #[serde(rename = "destinationAddress", default)]
+    pub destination_address: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: Option<String>,
+    #[serde(rename = "deletedAt", default)]
+    pub deleted_at: Option<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Profile update / trading wallet mode
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// The profile's trading wallet mode.
+///
+/// Self-signed API orders require `Eoa` mode. `SmartWallet` means the profile
+/// trades through a 1-click (Privy embedded / smart) wallet whose key cannot
+/// be exported, so EOA-signed orders are rejected in that mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TradingWalletMode {
+    /// Raw EOA wallet — required for self-signed API orders.
+    Eoa,
+    /// 1-click smart wallet (managed embedded key).
+    SmartWallet,
+}
+
+impl TradingWalletMode {
+    /// The wire value (`"eoa"` or `"smartWallet"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TradingWalletMode::Eoa => "eoa",
+            TradingWalletMode::SmartWallet => "smartWallet",
+        }
+    }
+}
+
+/// Request body for `PUT /profiles`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateProfileRequest {
+    /// Trading wallet mode (`eoa` or `smartWallet`).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "tradeWalletOption")]
+    pub trade_wallet_option: Option<TradingWalletMode>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  API tokens
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Request body for `POST /auth/api-tokens/derive`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeriveApiTokenRequest {
+    /// Human-readable label for the token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Requested scopes: `trading`, `account_creation`, `delegated_signing`,
+    /// `withdrawal`. Must be a subset of the partner's allowed scopes.
+    pub scopes: Vec<String>,
+}
+
+/// Response from `POST /auth/api-tokens/derive`.
+///
+/// The secret is returned **once** at creation — store it securely.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeriveApiTokenResponse {
+    /// Token ID — send as the `lmts-api-key` header.
+    #[serde(rename = "tokenId")]
+    pub token_id: String,
+    /// Base64-encoded HMAC secret — send to the SDK as the secret.
+    pub secret: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: Option<String>,
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_info_parses_full_payload() {
+        let json = r#"{
+            "matched": true,
+            "settlementStatus": "MINED",
+            "reason": null,
+            "eligibleAt": null,
+            "tradeEventId": "4aa706dd-6c57-4f3c-945a-99818dfd95f1",
+            "txHash": "0xabc123",
+            "clientOrderId": "client-order-001",
+            "stpMakerCancels": [],
+            "feeRateBps": 25,
+            "effectiveFeeBps": 26,
+            "totalsRaw": {
+                "contractsGross": "1000000",
+                "contractsFee": "1000",
+                "contractsNet": "999000",
+                "usdGross": "500000",
+                "usdFee": "500",
+                "usdNet": "499500"
+            }
+        }"#;
+        let parsed: OrderExecutionInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.settlement_status.as_deref(), Some("MINED"));
+        assert_eq!(
+            parsed.totals_raw.unwrap().contracts_net.as_deref(),
+            Some("999000")
+        );
+    }
+
+    #[test]
+    fn create_order_response_parses_execution() {
+        let json = r#"{
+            "order": {
+                "id": "9e31c452-8a2b-42d1-b327-65f18d07dc96",
+                "salt": "1778155025318314496",
+                "maker": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+                "signer": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+                "taker": "0x0000000000000000000000000000000000000000",
+                "tokenId": "19633204485790857949828516737993423758628930235371629943999544859324645414627",
+                "makerAmount": "5000000",
+                "takerAmount": "10000000",
+                "signatureType": 0,
+                "feeRateBps": 0,
+                "signature": "0x1234",
+                "orderType": "GTC",
+                "price": "0.5",
+                "side": 0,
+                "marketId": 7348,
+                "nonce": "0"
+            },
+            "makerMatches": [],
+            "execution": {"matched": false, "settlementStatus": "UNMATCHED",
+                          "feeRateBps": 0, "effectiveFeeBps": 0,
+                          "totalsRaw": {"contractsGross": "0", "contractsFee": "0",
+                                        "contractsNet": "0", "usdGross": "0",
+                                        "usdFee": "0", "usdNet": "0"}}
+        }"#;
+        let parsed: CreateOrderResponse = serde_json::from_str(json).unwrap();
+        assert!(parsed.execution.is_some());
+        assert_eq!(parsed.order.id, "9e31c452-8a2b-42d1-b327-65f18d07dc96");
+        assert_eq!(parsed.order.price.unwrap().float64(), 0.5);
+    }
+
+    #[test]
+    fn cancel_replace_batch_response_parses() {
+        let json = r#"{
+            "results": [
+                {
+                    "index": 0,
+                    "cancel": {"status": "SUCCESS", "orderId": "uuid-1"},
+                    "replacement": {"status": "NOT_ATTEMPTED"}
+                },
+                {
+                    "index": 1,
+                    "cancel": {"status": "FAILURE",
+                               "error": {"code": "ORDER_NOT_FOUND",
+                                         "message": "Order not found"}},
+                    "replacement": {"status": "FAILURE",
+                                    "error": {"code": "400",
+                                              "message": "Insufficient balance"}}
+                }
+            ]
+        }"#;
+        let parsed: CancelReplaceBatchResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.results.len(), 2);
+        assert_eq!(parsed.results[1].cancel.status, "FAILURE");
+        assert_eq!(
+            parsed.results[1]
+                .cancel
+                .error
+                .as_ref()
+                .unwrap()
+                .code
+                .as_deref(),
+            Some("ORDER_NOT_FOUND")
+        );
+    }
+
+    #[test]
+    fn ome_event_accepts_string_and_numeric_event_ids() {
+        let numeric = r#"{
+            "source": "OME", "type": "PLACEMENT", "eventId": 1234567,
+            "orderId": "550e8400-e29b-41d4-a716-446655440000",
+            "userId": 42, "marketId": "17", "token": "878930",
+            "side": "BUY", "price": 0.53, "remainingSize": 100,
+            "timestamp": "2026-04-20T10:15:30.000Z",
+            "occurredAt": "2026-04-20T10:15:30.000Z",
+            "publishedAt": "2026-04-20T10:15:30.042Z"
+        }"#;
+        let parsed: OmeEvent = serde_json::from_str(numeric).unwrap();
+        assert_eq!(parsed.event_id.as_u64(), Some(1234567));
+
+        let terminal = r#"{
+            "source": "OME", "type": "EXECUTION", "status": "FILLED",
+            "eventId": "terminal:550e8400-e29b-41d4-a716-446655440000",
+            "orderId": "550e8400-e29b-41d4-a716-446655440000",
+            "userId": 42, "marketId": "17", "token": "878930",
+            "side": "BUY", "price": "0.53", "remainingSize": "0",
+            "timestamp": "2026-04-20T10:15:40.000Z"
+        }"#;
+        let parsed: OmeEvent = serde_json::from_str(terminal).unwrap();
+        assert_eq!(parsed.status.as_deref(), Some("FILLED"));
+        assert!(parsed.event_id.as_str().is_some());
+    }
+
+    #[test]
+    fn maintenance_status_parses() {
+        let json = r#"{
+            "active": [{
+                "startsAt": "2026-06-22T15:00:00.000Z",
+                "endsAt": "2026-06-22T18:00:00.000Z",
+                "publicMessage": "Trading is temporarily limited to cancellations.",
+                "effects": [{"target": "trading", "mode": "cancel_only"}]
+            }],
+            "scheduled": []
+        }"#;
+        let parsed: MaintenanceStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.active.len(), 1);
+        assert_eq!(
+            parsed.active[0].effects[0].mode.as_deref(),
+            Some("cancel_only")
+        );
+    }
+
+    #[test]
+    fn timeline_response_parses() {
+        let json = r#"{
+            "current": {"slotId": 4821, "slug": "btc-up-or-down-5-min-1771934700",
+                        "state": "OPEN", "tradable": true,
+                        "startAt": "2026-05-28T12:05:00.000Z",
+                        "endAt": "2026-05-28T12:10:00.000Z", "countdownSec": 142},
+            "next": {"slotId": 4822, "slug": "btc-up-or-down-5-min-1771935000",
+                     "state": "PRE_OPEN", "tradable": false},
+            "batch": []
+        }"#;
+        let parsed: MarketTimelineResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.current.unwrap().state.as_deref(), Some("OPEN"));
+        assert_eq!(parsed.next.as_ref().unwrap().tradable, Some(false));
+    }
+
+    #[test]
+    fn referral_me_parses() {
+        let json = r#"{
+            "customTier": "Gold",
+            "tiers": [{"minBasisRaw": "25000000000", "name": "Bronze",
+                        "rate": "0.10"}],
+            "totalBasisRaw": "31500000000",
+            "totalEarnedRaw": "184250000"
+        }"#;
+        let parsed: ReferralMeResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.custom_tier.as_deref(), Some("Gold"));
+        assert_eq!(parsed.tiers[0].name.as_deref(), Some("Bronze"));
+    }
+
+    #[test]
+    fn history_entry_parses_clob_identifiers() {
+        let json = r#"{
+            "blockTimestamp": 1744115608,
+            "collateralAmount": "25.5",
+            "market": null,
+            "outcomeTokenAmount": "50",
+            "outcomeTokenAmounts": ["50", "0"],
+            "outcomeIndex": 0,
+            "outcomeTokenPrice": 0.51,
+            "strategy": "Limit Buy",
+            "operation": "buy",
+            "tradeEventId": "4aa706dd-6c57-4f3c-945a-99818dfd95f1",
+            "orderId": "550e8400-e29b-41d4-a716-446655440000",
+            "makerMatchId": "cb12",
+            "transactionHash": "0xabc"
+        }"#;
+        let parsed: HistoryEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.operation.as_deref(), Some("buy"));
+        assert!(parsed.trade_event_id.is_some());
+        assert!(parsed.order_id.is_some());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -962,6 +2067,10 @@ pub struct ClobPositionData {
     pub positions: Vec<ClobPosition>,
     #[serde(rename = "tokenIds")]
     pub token_ids: Vec<String>,
+    /// Epoch milliseconds of the on-chain balance change that triggered this
+    /// update (absent on the initial snapshot after `subscribe_positions`).
+    #[serde(default)]
+    pub timestamp: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -70,7 +70,7 @@ async fn main() -> Result<(), LimitlessError> {
 
     // ── Cursor-paginated history ───────────────────────────────────────
     println!("\n=== Portfolio History ===");
-    let page1 = api.get_history(None, Some(5)).await?;
+    let page1 = api.get_history(None, Some(5), None).await?;
     println!("  Page 1: {} entries", page1.data.len());
     for entry in &page1.data {
         let market = entry
@@ -87,7 +87,7 @@ async fn main() -> Result<(), LimitlessError> {
     }
 
     if let Some(ref cursor) = page1.next_cursor {
-        let page2 = api.get_history(Some(cursor), Some(5)).await?;
+        let page2 = api.get_history(Some(cursor), Some(5), None).await?;
         println!(
             "  Page 2: {} entries (cursor: {:?})",
             page2.data.len(),

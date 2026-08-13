@@ -19,7 +19,8 @@
 //!
 //!     // Authenticated — creates `Trader`, `Portfolio`, `Stream` under the hood
 //!     let api = LimitlessClient::builder()
-//!         .set_credentials("lmts_sk_...", "your_base64_secret")
+//!         .api_key("lmts_sk_...")
+//!         .secret("your_base64_secret")
 //!         .build()?;
 //!     let positions = api.get_positions().await?;
 //!     println!("CLOB positions: {}", positions.clob.len());
@@ -71,17 +72,21 @@
 //! ```no_run
 //! use limitless::prelude::*;
 //!
-//! // Builder (reads LIMITLESS_API_KEY / LIMITLESS_API_SECRET from env)
-//! let api = LimitlessClient::builder().build()?;
+//! fn main() -> Result<(), LimitlessError> {
+//!     // Builder (reads LIMITLESS_API_KEY / LIMITLESS_API_SECRET from env)
+//!     let api = LimitlessClient::builder().build()?;
 //!
-//! // Or explicit credentials:
-//! let api = LimitlessClient::builder()
-//!     .set_credentials("lmts_sk_...", "base64_secret")
-//!     .build()?;
+//!     // Or explicit credentials:
+//!     let api = LimitlessClient::builder()
+//!         .api_key("lmts_sk_...")
+//!         .secret("base64_secret")
+//!         .build()?;
 //!
-//! // Or use managers directly:
-//! let trader = Trader::new(Some("key".into()), Some("secret".into()));
-//! # Ok::<_, limitless::LimitlessError>(())
+//!     // Or use managers directly:
+//!     let trader = Trader::new(Some("key".into()), Some("secret".into()));
+//!     let _ = (api, trader);
+//!     Ok(())
+//! }
 //! ```
 //!
 //! ## EIP-712 Order Signing
@@ -94,21 +99,24 @@
 //! use limitless::prelude::*;
 //! use limitless::signing::Eip712Signer;
 //!
-//! let signer = Eip712Signer::new(
-//!     "0xYourPrivateKey...",
-//!     "0xVenueExchangeContract...",  // from GET /markets/:slug → venue.exchange
-//! )?;
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let signer = Eip712Signer::new(
+//!         "0xYourPrivateKey...",
+//!         "0xVenueExchangeContract...",  // from GET /markets/:slug → venue.exchange
+//!     )?;
 //!
-//! // Build + sign a GTC limit order
-//! let order_data = signer.build_gtc_order(
-//!     "0xYourWallet...",
-//!     "1234567890",  // token_id
-//!     OrderSide::Buy,
-//!     0.55,
-//!     10.0,
-//!     0,  // fee_rate_bps
-//! )?;
-//! # Ok::<_, Box<dyn std::error::Error>>(())
+//!     // Build + sign a GTC limit order
+//!     let order_data = signer.build_gtc_order(
+//!         "0xYourWallet...",
+//!         "1234567890",  // token_id
+//!         OrderSide::Buy,
+//!         0.55,
+//!         10.0,
+//!         0,  // fee_rate_bps
+//!     )?;
+//!     let _ = order_data;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! ## WebSocket Streams
@@ -154,18 +162,24 @@
 #![doc(html_root_url = "https://docs.rs/rs_limitless")]
 #![forbid(unsafe_code)]
 
+mod amm;
 mod api;
+mod api_tokens;
 mod client;
 mod config;
 mod errors;
 mod lclient;
+mod leaderboard;
 mod markets;
 mod models;
 mod navigation;
+mod partner;
 mod portfolio;
+mod referral;
 pub mod retry;
 mod serde_helpers;
 pub mod signing;
+mod system;
 mod trading;
 mod util;
 pub mod ws;
@@ -175,18 +189,24 @@ pub mod ws;
 /// Import it with `use limitless::prelude::*;` to get access to all
 /// manager types, configuration, errors, and model types in one go.
 pub mod prelude {
+    pub use crate::amm::*;
     pub use crate::api::*;
+    pub use crate::api_tokens::*;
     pub use crate::client::*;
     pub use crate::config::*;
     pub use crate::errors::*;
     pub use crate::lclient::*;
+    pub use crate::leaderboard::*;
     pub use crate::markets::*;
     pub use crate::models::order::*;
     pub use crate::models::*;
     pub use crate::navigation::*;
+    pub use crate::partner::*;
     pub use crate::portfolio::*;
+    pub use crate::referral::*;
     pub use crate::retry::*;
     pub use crate::serde_helpers::*;
+    pub use crate::system::*;
     pub use crate::trading::*;
     pub use crate::util::*;
     pub use crate::ws::*;

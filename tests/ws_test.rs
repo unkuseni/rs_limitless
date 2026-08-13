@@ -156,9 +156,10 @@ async fn ws_dynamic_subscribe_unsubscribe() {
             match &kind {
                 WsEventKind::NewPriceData(p) => {
                     println!(
-                        "  NewPriceData: market={} prices={}",
+                        "  NewPriceData: market={} yes={} no={}",
                         p.market_address,
-                        p.updated_prices.len()
+                        p.updated_prices.yes.float64(),
+                        p.updated_prices.no.float64()
                     );
                 }
                 WsEventKind::OrderbookUpdate(o) => {

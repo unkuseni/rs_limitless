@@ -41,8 +41,28 @@ impl OrderSide {
 pub enum OrderType {
     /// Good-Till-Cancelled: rests on the orderbook until filled or cancelled.
     Gtc,
+    /// Fill-And-Kill: matches immediately against available liquidity and
+    /// cancels any unmatched remainder instead of resting on the book.
+    Fak,
     /// Fill-Or-Kill: executes immediately at market or is cancelled entirely.
     Fok,
+}
+
+/// Self-trade prevention policy for `POST /orders`.
+///
+/// Controls what happens when an incoming order would match against your own
+/// resting order on the same token. Sits at the top level of the request,
+/// outside the EIP-712 signed `order` payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StpPolicy {
+    /// Default. Cancel your conflicting resting order and continue with the
+    /// incoming order.
+    CancelMaker,
+    /// Reject the incoming order before it self-trades.
+    CancelTaker,
+    /// Cancel your conflicting resting order and reject the incoming order.
+    CancelBoth,
 }
 
 // ── API-facing order (what you send to POST /orders) ──
@@ -82,10 +102,16 @@ pub struct OrderData {
     /// `0` = BUY, `1` = SELL.
     pub side: u8,
     /// The EIP-712 signature (0x-prefixed hex, 65 bytes for EOA).
-    pub signature: String,
-    /// `0` = EOA signature.
-    #[serde(rename = "signatureType")]
-    pub signature_type: u8,
+    ///
+    /// Omit (set to `None`) for **delegated signing**: with the
+    /// `delegated_signing` scope the server signs the order using the Privy
+    /// server wallet linked to the target sub-account, so `signature` and
+    /// `signature_type` must both be omitted from the payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// `0` = EOA signature. Omitted together with `signature` for delegated signing.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "signatureType")]
+    pub signature_type: Option<u8>,
 }
 
 /// The full request body for `POST /orders`.
@@ -108,6 +134,64 @@ pub struct CreateOrderRequest {
     /// Optional profile ID to place order on behalf of (partner flow).
     #[serde(skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
     pub on_behalf_of: Option<u64>,
+    /// Reject the order if it would immediately match (GTC only).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "postOnly")]
+    pub post_only: Option<bool>,
+    /// Optional client-stamped creation time (Unix ms) for receive-window checks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
+    /// Optional maximum accepted order age in milliseconds (1..=10000).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "recvWindow")]
+    pub recv_window: Option<u64>,
+    /// Self-trade prevention policy. Defaults to `cancel_maker` when omitted.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "stpPolicy")]
+    pub stp_policy: Option<StpPolicy>,
+}
+
+// ── Cancel-and-replace ──
+
+/// Identifies an order to cancel: exactly one of `order_id` or
+/// `client_order_id` must be set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CancelOrderIdentifier {
+    /// Internal order ID (UUID).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "orderId")]
+    pub order_id: Option<String>,
+    /// Client-provided order ID from order creation.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "clientOrderId")]
+    pub client_order_id: Option<String>,
+}
+
+/// Controls whether a replacement is attempted after cancellation fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum CancelReplaceMode {
+    /// Skip the replacement when the cancel fails.
+    StopOnFailure,
+    /// Attempt the replacement regardless of the cancel outcome.
+    AllowFailure,
+}
+
+/// A single cancel-and-replace operation for `POST /orders/cancel-replace`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplaceOperation {
+    /// The order to cancel.
+    pub cancel: CancelOrderIdentifier,
+    /// The replacement order (same shape as `POST /orders` without `onBehalfOf`).
+    pub replacement: CreateOrderRequest,
+    /// Failure-mode selection.
+    pub mode: CancelReplaceMode,
+    /// Optional profile ID for an authorized partner sub-account. Applies to
+    /// both cancellation and replacement.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
+    pub on_behalf_of: Option<u64>,
+}
+
+/// Request body for `POST /orders/cancel-replace/batch`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelReplaceBatchRequest {
+    /// Independent cancel-and-replace operations (1 to 4).
+    pub operations: Vec<CancelReplaceOperation>,
 }
 
 // ── Amount calculation constants ──
@@ -196,7 +280,7 @@ fn div_ceil_u128(a: u128, b: u128) -> u128 {
 /// Panics if the scaled result exceeds `i64::MAX`.
 ///
 /// ```
-/// use limitless::models::order::*;
+/// use limitless::prelude::*;
 ///
 /// // BUY 10 shares at $0.55
 /// let (maker, taker) = gtc_amounts(OrderSide::Buy, 0.55, 10.0);
@@ -334,11 +418,21 @@ pub fn validate_order_data(order: &OrderData) -> Result<(), String> {
             order.side
         ));
     }
-    if order.signature_type > 2 {
-        return Err(format!(
-            "signature_type must be 0-2, got: {}",
-            order.signature_type
-        ));
+    // `signature`/`signature_type` are omitted only for delegated signing;
+    // when present, validate the signature type value.
+    if let Some(signature_type) = order.signature_type {
+        if signature_type > 2 {
+            return Err(format!(
+                "signature_type must be 0-2, got: {}",
+                signature_type
+            ));
+        }
+    }
+    if order.signature.is_some() != order.signature_type.is_some() {
+        return Err(
+            "signature and signature_type must be provided together, or both omitted for delegated signing"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -451,5 +545,44 @@ mod tests {
     #[test]
     fn validate_fok_accepts_valid_amount() {
         assert!(validate_fok_order(100.0).is_ok());
+    }
+
+    #[test]
+    fn order_data_omits_signature_fields_for_delegated_signing() {
+        let unsigned = OrderData {
+            salt: 1234567890,
+            maker: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            signer: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            taker: "0x0000000000000000000000000000000000000000".to_string(),
+            token_id:
+                "19633204485790857949828516737993423758628930235371629943999544859324645414627"
+                    .to_string(),
+            maker_amount: 5_000_000,
+            taker_amount: 10_000_000,
+            expiration: "0".to_string(),
+            nonce: 0,
+            fee_rate_bps: 0,
+            side: 0,
+            signature: None,
+            signature_type: None,
+        };
+        let json = serde_json::to_string(&unsigned).unwrap();
+        assert!(!json.contains("signature"));
+        assert!(!json.contains("signatureType"));
+        assert!(validate_order_data(&unsigned).is_ok());
+
+        // Signed orders must include both fields together.
+        let mut signed = unsigned.clone();
+        signed.signature = Some("0x1234".to_string());
+        signed.signature_type = Some(0);
+        let json = serde_json::to_string(&signed).unwrap();
+        assert!(json.contains("\"signature\":\"0x1234\""));
+        assert!(json.contains("\"signatureType\":0"));
+        assert!(validate_order_data(&signed).is_ok());
+
+        // Mismatched pair is rejected.
+        let mut bad = unsigned.clone();
+        bad.signature = Some("0x1234".to_string());
+        assert!(validate_order_data(&bad).is_err());
     }
 }

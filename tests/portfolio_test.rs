@@ -37,12 +37,12 @@ async fn get_positions_requires_auth() {
 async fn get_history_pagination() {
     let portfolio = auth_portfolio();
 
-    match portfolio.get_history(None, Some(3)).await {
+    match portfolio.get_history(None, Some(3), None).await {
         Ok(page1) => {
             println!("Page 1: {} entries", page1.data.len());
 
             if let Some(ref cursor) = page1.next_cursor {
-                let page2 = portfolio.get_history(Some(cursor), Some(3)).await;
+                let page2 = portfolio.get_history(Some(cursor), Some(3), None).await;
                 if let Ok(page2) = page2 {
                     println!("Page 2: {} entries", page2.data.len());
                 }

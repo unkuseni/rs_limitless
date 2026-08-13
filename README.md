@@ -51,10 +51,16 @@ trade positions, track portfolio performance, and navigate the market hierarchy.
 
 | Module | Auth | Endpoints |
 |--------|------|-----------|
-| **Markets** | No | Browse active, search, get details, oracle candles, feed events, category counts |
-| **Trader** | Yes | Create GTC/FOK orders, batch status, cancel (single/batch/all), orderbook, historical prices, locked balance, user orders, market events |
-| **Portfolio** | Yes | Profile, trade history, AMM + CLOB positions with P&L, PnL chart, points breakdown, cursor-paginated history, allowance checks |
+| **Markets** | No | Browse active, search, get details, oracle candles, feed events, category counts, market timeline |
+| **Trader** | Yes | Create GTC/FAK/FOK orders (self-signed or **delegated**), batch status, cancel (single/batch/all/combined), cancel-replace, orderbook, historical prices, locked balance, user orders, market events |
+| **Portfolio** | Yes | Current profile, profile, profile update (trading wallet mode switch), trade history, AMM + CLOB positions with P&L, PnL chart, points breakdown, cursor-paginated history (with market filter), public history, allowance checks, redeem, withdraw, withdrawal-address allowlist |
 | **Navigation** | No | Navigation tree, market pages, page-specific market listings, property keys & options |
+| **PartnerAccounts** | Yes | Create sub-accounts, list/recover sub-accounts, check & retry delegated-trading allowances |
+| **Amm** | Yes | Server-wallet AMM buy/sell, allowance check & approve |
+| **System** | No | Maintenance status (`GET /maintenance/status`) |
+| **Referral** | Varies | Referral stats, referred users, global & friends leaderboards |
+| **Leaderboard** | No | Live Unrealized PnL by market, biggest open positions |
+| **ApiTokens** | Privy + HMAC | Capability check, derive scoped tokens, list & revoke active tokens |
 
 ### WebSocket
 
@@ -65,14 +71,21 @@ trade positions, track portfolio performance, and navigate the market hierarchy.
 | `subscribe_positions` | **Yes** | Portfolio position balance changes |
 | `subscribe_transactions` | **Yes** | On-chain transaction events |
 | `subscribe_order_events` | **Yes** | OME state & settlement lifecycle |
+| `subscribe_unrealized_pnl` | No | Unrealized PnL leaderboard invalidation hints |
 
 ### Additional
 
-- **EIP-712 signing** for CLOB orders (GTC, FOK)
-- **HMAC-SHA256** request authentication
+- **EIP-712 signing** for CLOB orders (GTC, FAK, FOK)
+- **HMAC-SHA256** request authentication (scoped API tokens) + HMAC-signed WS handshake
+- **Self-trade prevention** (`stpPolicy`), receive-window (`timestamp`/`recvWindow`), and `postOnly` on order creation
+- **Delegated signing** — unsigned orders for server-wallet sub-accounts (the server signs via a managed Privy wallet)
+- **Partner sub-account reads** — `x-on-behalf-of` header support (`for_sub_account`)
+- **Cancel-and-replace** — single and batch, with per-operation outcomes
 - **Dynamic WebSocket subscriptions** — sub/unsub without reconnecting
+- **Auto-reconnect** — `ws_subscribe_market` reconnects with exponential backoff and re-emits its subscription
+- **Typed event dispatch** — `positions` (AMM/CLOB), `orderEvent` (OME/SETTLEMENT), and every documented server event
 - **Exponential backoff retry** for transient failures
-- **WebSocket ping/pong** keep-alive
+- **Socket.IO heartbeat** — server-initiated pings are answered automatically (the client never sends its own ping frames)
 
 ---
 
@@ -116,7 +129,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rs_limitless = "0.1"
+rs_limitless = "0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -124,19 +137,16 @@ Or use the crate alias `limitless`:
 
 ```toml
 [dependencies]
-limitless = { package = "rs_limitless", version = "0.1" }
+limitless = { package = "rs_limitless", version = "0.2" }
 tokio = { version = "1", features = ["full"] }
 ```
 
 ### Requirements
 
 - Rust **1.70+** (edition 2021)
-- OpenSSL development headers (for native TLS)
+- TLS via the platform's native stack: **schannel** on Windows, **Security.framework** on macOS, **OpenSSL** on Linux
 
 ```bash
-# macOS
-brew install openssl
-
 # Ubuntu / Debian
 sudo apt install libssl-dev pkg-config
 
@@ -158,7 +168,8 @@ let client = LimitlessClient::builder().build()?;
 
 // 2. Builder with explicit credentials
 let client = LimitlessClient::builder()
-    .set_credentials("lmts_sk_...", "base64_secret")
+    .api_key("lmts_sk_...")
+    .secret("base64_secret")
     .build()?;
 
 // 3. Direct manager construction
@@ -200,14 +211,21 @@ async fn main() -> Result<(), LimitlessError> {
     // Portfolio
     let positions = api.get_positions().await?;
     let pnl = api.get_pnl_chart(Some("7d")).await?;
-    let history = api.get_history(None, Some(50)).await?;
+    let history = api.get_history(None, Some(50), None).await?;
 
     // Navigation
     let tree = api.get_navigation_tree().await?;
 
+    // System
+    let maintenance = api.get_maintenance_status(Some("trading")).await?;
+
+    // Leaderboards (public)
+    let biggest = api.get_biggest_positions(Some(10)).await?;
+
     // WebSocket
     let stream = api.stream();
 
+    let _ = (maintenance, biggest, stream);
     Ok(())
 }
 ```
@@ -321,6 +339,10 @@ let request = CreateOrderRequest {
     market_slug: "btc-above-100k".to_string(),
     client_order_id: None,
     on_behalf_of: None,
+    post_only: None,
+    timestamp: None,
+    recv_window: None,
+    stp_policy: None,
 };
 let body = serde_json::to_string(&request)?;
 let trader: Trader = Limitless::new(Some("key".into()), Some("secret".into()));
@@ -353,9 +375,9 @@ async fn main() -> Result<(), LimitlessError> {
     }
 
     // Cursor-paginated history
-    let page1 = api.get_history(None, Some(5)).await?;
+    let page1 = api.get_history(None, Some(5), None).await?;
     if let Some(cursor) = &page1.next_cursor {
-        let page2 = api.get_history(Some(cursor), Some(5)).await?;
+        let page2 = api.get_history(Some(cursor), Some(5), None).await?;
         println!("Page 2: {} entries", page2.data.len());
     }
 
@@ -404,6 +426,139 @@ async fn main() -> Result<(), LimitlessError> {
     Ok(())
 }
 ```
+
+### Partner, AMM & System
+
+```rust
+use limitless::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), LimitlessError> {
+    // HMAC scoped token (account_creation + delegated_signing scopes)
+    let api = LimitlessClient::builder()
+        .api_key("lmts_sk_...")
+        .secret("base64_secret")
+        .build()?;
+
+    // ── Partner sub-accounts ──
+    let accounts = api.list_partner_accounts(None, Some(25), Some(1)).await?;
+    for account in accounts.data {
+        println!("Sub-account {}: {}", account.profile_id.unwrap_or(0), account.account.as_deref().unwrap_or(""));
+    }
+
+    // ── AMM trading from a server wallet ──
+    let buy = AmmBuyRequest {
+        market: "will-btc-hit-150k-2026".to_string(),
+        outcome_index: 0,           // 0 = YES, 1 = NO
+        collateral_amount: "1000000".to_string(), // 1 USDC in base units
+        slippage_bps: Some(100),    // 1%
+        idempotency_key: "buy-001".to_string(),
+        on_behalf_of: Some(12345),
+    };
+    let result = api.amm_buy(&buy).await?;
+    println!("AMM buy: {:?}", result.transaction_id);
+
+    // ── Maintenance status ──
+    let status = api.get_maintenance_status(Some("trading")).await?;
+    println!("Active windows: {}", status.active.len());
+
+    // ── Referral program ──
+    let stats = api.get_referral_stats().await?;
+    println!("Referral earnings (raw): {:?}", stats.total_earned_raw);
+
+    // ── Live leaderboards (public) ──
+    let board = api.get_market_unrealized_pnl(7348, Some("pnl"), Some(10), Some(1)).await?;
+    println!("Leaderboard rows: {}", board.data.len());
+
+    Ok(())
+}
+```
+
+### Cancel & Replace
+
+Reprice a resting order atomically-ish with one request — the cancel and the
+replacement each report their own outcome:
+
+```rust
+use limitless::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), LimitlessError> {
+    let api = LimitlessClient::builder().build()?;
+
+    // Build the replacement as a normal signed order (see EIP-712 section)
+    let replacement = CreateOrderRequest { /* ... */ };
+
+    let operation = CancelReplaceOperation {
+        cancel: CancelOrderIdentifier {
+            client_order_id: Some("old-order-001".to_string()),
+            order_id: None,
+        },
+        replacement,
+        mode: CancelReplaceMode::StopOnFailure,
+        on_behalf_of: None,
+    };
+
+    let body = serde_json::to_string(&operation)?;
+    let result = api.cancel_replace(&body).await?;
+    println!(
+        "cancel={} replacement={}",
+        result.cancel.status, result.replacement.status
+    );
+
+    Ok(())
+}
+```
+
+### Delegated Orders & Partner Reads
+
+With the `delegated_signing` scope, place orders for a server-wallet sub-account
+**without a private key** — the server signs with the sub-account's managed Privy
+wallet. Read sub-account data with `for_sub_account`, which adds the
+`x-on-behalf-of` header to every signed request:
+
+```rust
+use limitless::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), LimitlessError> {
+    // HMAC scoped token (trading + delegated_signing scopes)
+    let api = LimitlessClient::builder()
+        .api_key("lmts_sk_...")
+        .secret("base64_secret")
+        .build()?;
+
+    let sub_account_id = 12345;      // profileId from create_sub_account
+    let wallet = "0xSubAccountWallet..."; // account from create_sub_account
+
+    // GTC: buy 10 shares at $0.55 — unsigned, server signs
+    let order = api.place_delegated_order(
+        wallet, "btc-100k", "<tokenId>", OrderSide::Buy, OrderType::Gtc,
+        Some(0.55), Some(10.0), None, sub_account_id,
+    ).await?;
+    println!("Delegated order: {}", order.order.id);
+
+    // FOK: spend 5 USDC at market price — unsigned, server signs
+    let order = api.place_delegated_order(
+        wallet, "btc-100k", "<tokenId>", OrderSide::Buy, OrderType::Fok,
+        None, None, Some(5.0), sub_account_id,
+    ).await?;
+
+    // Read the sub-account's data via the x-on-behalf-of header
+    let sub = api.for_sub_account(sub_account_id);
+    let positions = sub.get_positions().await?;          // sub-account's positions
+    let history = sub.get_history(None, Some(10), None).await?;
+    let orders = sub.get_user_orders("btc-100k", Some(&["LIVE"]), Some(10)).await?;
+
+    let _ = (order, positions, history, orders);
+    Ok(())
+}
+```
+
+> **Self-signed orders need EOA mode.** If the bot's own account ever enabled
+> 1-click (smart wallet) trading, switch it back with
+> `api.set_trading_wallet_mode(TradingWalletMode::Eoa).await?;` before placing
+> orders signed with a private key.
 
 ### WebSocket Streams
 
@@ -472,6 +627,7 @@ println!("WebSocket endpoint is reachable ✓");
 | `SubscribePositions` | `subscribe_positions` | Yes | Portfolio position updates |
 | `SubscribeTransactions` | `subscribe_transactions` | Yes | On-chain transaction events |
 | `SubscribeOrderEvents` | `subscribe_order_events` | Yes | OME + settlement events |
+| `SubscribeUnrealizedPnl` | `subscribe_unrealized_pnl` | No | Unrealized PnL invalidation hints |
 
 ---
 
@@ -482,13 +638,19 @@ rs_limitless
 ├── src/
 │   ├── lib.rs              # Crate root, prelude, re-exports
 │   ├── api.rs              # API endpoint enums + Limitless trait
-│   ├── client.rs           # HTTP client with HMAC signing
+│   ├── client.rs           # HTTP client with HMAC signing + WS auth
 │   ├── config.rs           # REST/WS endpoint config + recv_window
 │   ├── errors.rs           # LimitlessError enum
-│   ├── markets.rs          # Public market data
-│   ├── trading.rs          # Order management + convenience methods
-│   ├── portfolio.rs        # Profile, positions, PnL, history
+│   ├── markets.rs          # Public market data + market timeline
+│   ├── trading.rs          # Order management + cancel-replace + convenience methods
+│   ├── portfolio.rs        # Profile, positions, PnL, history, redeem/withdraw
 │   ├── navigation.rs       # Market page tree & property keys
+│   ├── partner.rs          # Partner sub-accounts & allowance recovery
+│   ├── api_tokens.rs       # Scoped API token management (derive/list/revoke)
+│   ├── amm.rs              # Server-wallet AMM trading (buy/sell/allowances)
+│   ├── system.rs           # Maintenance status
+│   ├── referral.rs         # Referral program endpoints
+│   ├── leaderboard.rs      # Live Unrealized PnL leaderboards
 │   ├── signing.rs          # EIP-712 order signing
 │   ├── lclient.rs          # LimitlessClient (unified builder)
 │   ├── models/

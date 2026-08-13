@@ -1,10 +1,9 @@
 use crate::prelude::*;
 use crate::ws::client::WsClient;
-use crate::ws::PING_INTERVAL;
 
 use futures::{SinkExt, StreamExt};
 use log::{debug, error, trace, warn};
-use std::time::Instant;
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -53,6 +52,19 @@ pub fn frame_socketio_event(event: &str, data: &Value) -> String {
 /// Format: `40{namespace},`
 pub fn frame_socketio_connect() -> String {
     format!("40{namespace},", namespace = SOCKET_NAMESPACE)
+}
+
+/// Build a Socket.IO event frame with **no payload**.
+///
+/// Format: `42{namespace},["{event}"]`
+///
+/// Payload-less events per the WebSocket reference: `subscribe_order_events`
+/// and `subscribe_market_lifecycle` / `unsubscribe_market_lifecycle` take no
+/// payload.
+pub fn frame_socketio_event_no_payload(event: &str) -> String {
+    let payload = serde_json::to_string(&serde_json::json!([event]))
+        .unwrap_or_else(|_| format!("[\"{event}\"]"));
+    format!("42{namespace},{payload}", namespace = SOCKET_NAMESPACE)
 }
 
 /// Parse an Engine.IO text message and extract the Socket.IO event name
@@ -137,24 +149,29 @@ fn is_namespace_disconnect(text: &str) -> bool {
 ///
 /// # Event Reference
 ///
-/// | Client → Server (emit)         | Auth | Description                        |
-/// |-------------------------------|------|------------------------------------|
-/// | `subscribe_market_prices`     | No   | AMM prices + CLOB orderbook       |
-/// | `subscribe_positions`         | Yes  | Portfolio position updates         |
-/// | `subscribe_order_events`      | Yes  | OME + settlement lifecycle        |
-/// | `subscribe_market_lifecycle`  | No   | Market creation / resolution       |
+/// | Client → Server (emit)         | Auth | Description                          |
+/// |--------------------------------|------|--------------------------------------|
+/// | `subscribe_market_prices`      | No   | AMM prices + CLOB orderbook          |
+/// | `subscribe_positions`          | Yes  | Portfolio position updates           |
+/// | `subscribe_order_events`       | Yes  | OME + settlement lifecycle           |
+/// | `subscribe_market_lifecycle`   | No   | Market creation / resolution         |
+/// | `unsubscribe_market_lifecycle` | No   | Stop market lifecycle events         |
+/// | `subscribe_unrealized_pnl`     | No   | Unrealized PnL leaderboard hints     |
+/// | `unsubscribe_unrealized_pnl`   | No   | Stop Unrealized PnL hints            |
 ///
-/// | Server → Client (on)  | Auth | Description                          |
-/// |-----------------------|------|--------------------------------------|
-/// | `newPriceData`        | No   | AMM price update                     |
-/// | `orderbookUpdate`     | No   | CLOB orderbook snapshot              |
-/// | `positions`           | Yes  | Position balance change              |
-/// | `orderEvent`          | Yes  | OME state or settlement result       |
-/// | `marketCreated`       | No   | New market funded and visible        |
-/// | `marketResolved`      | No   | Market resolved with winning outcome |
-/// | `system`              | —    | System notifications                 |
-/// | `authenticated`       | Yes  | Auth confirmation                    |
-/// | `exception`           | —    | Error notifications                  |
+/// | Server → Client (on)          | Auth | Description                          |
+/// |-------------------------------|------|--------------------------------------|
+/// | `newPriceData`                | No   | AMM price update                     |
+/// | `orderbookUpdate`             | No   | CLOB orderbook snapshot              |
+/// | `positions`                   | Yes  | Position balance change              |
+/// | `orderEvent`                  | Yes  | OME state or settlement result       |
+/// | `marketCreated`               | No   | New market funded and visible        |
+/// | `marketResolved`              | No   | Market resolved with winning outcome |
+/// | `unrealizedPnlProjectionChanged` | No | Leaderboard invalidation hint        |
+/// | `system`                      | —    | System notifications                 |
+/// | `authenticated`               | Yes  | Auth confirmation                    |
+/// | `exception`                   | —    | Error notifications                  |
+/// | `error`                       | —    | Error frames (e.g. scope limit)      |
 #[derive(Clone)]
 pub struct Stream {
     pub client: Client,
@@ -201,10 +218,9 @@ impl Stream {
         // ── Send proper close ────────────────────────────────────
         let _ = ws_client
             .stream()
-            .send(
-                WsMessage::Text(format!("41{namespace},", namespace = SOCKET_NAMESPACE).into())
-                    .into(),
-            )
+            .send(WsMessage::Text(
+                format!("41{namespace},", namespace = SOCKET_NAMESPACE).into(),
+            ))
             .await;
         let _ = ws_client.disconnect().await;
 
@@ -267,7 +283,8 @@ impl Stream {
     /// Subscribe to a stream with dynamic command support **and authentication**.
     ///
     /// Like [`ws_subscribe_with_commands`](Self::ws_subscribe_with_commands) but
-    /// sends the `X-API-Key` header on the WebSocket upgrade request, enabling
+    /// signs the WebSocket handshake with HMAC credentials
+    /// (`lmts-api-key` / `lmts-timestamp` / `lmts-signature`), enabling
     /// private channels:
     ///
     /// - `subscribe_positions` — real-time position balance updates
@@ -275,10 +292,11 @@ impl Stream {
     ///
     /// # Requirements
     ///
-    /// The [`Stream`] must have been constructed with an API key (via
-    /// [`Limitless::new`] or [`LimitlessClient::builder().set_credentials()`]).
-    /// Without a key the connection is still established but private
-    /// subscriptions will fail with an `exception` event.
+    /// The [`Stream`] must have been constructed with HMAC credentials (via
+    /// [`Limitless::new`] or [`LimitlessClient::builder()`]); a legacy API key
+    /// falls back to the `X-API-Key` header. Without credentials the
+    /// connection is still established but private subscriptions fail with an
+    /// `exception` event.
     ///
     /// # Example
     ///
@@ -294,9 +312,10 @@ impl Stream {
     ///     );
     ///     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     ///
-    ///     // Send subscription commands after connecting
+    ///     // Send subscription commands after connecting. `subscribe_order_events`
+    ///     // takes no payload.
     ///     tokio::spawn(async move {
-    ///         let sub = frame_socketio_event("subscribe_order_events", &serde_json::json!({}));
+    ///         let sub = frame_socketio_event_no_payload("subscribe_order_events");
     ///         let _ = cmd_tx.send(sub);
     ///     });
     ///
@@ -325,6 +344,11 @@ impl Stream {
     /// Handles the full lifecycle: connect, handshake, subscribe, and
     /// event dispatch. The handler receives `[event_name, payload]` arrays.
     ///
+    /// **Auto-reconnect:** when the connection drops, this method reconnects
+    /// with exponential backoff (1s, doubling to a 30s cap) and re-emits
+    /// `subscribe_market_prices` — subscriptions are not persisted server-side
+    /// across disconnects.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -347,27 +371,56 @@ impl Stream {
     where
         F: FnMut(&str, &Value) -> Result<(), LimitlessError> + 'static + Send,
     {
-        let stream = self.client.wss_connect(None, false, None).await?;
-        let mut ws_client = WsClient::new(stream);
-
-        // ── Handshake ─────────────────────────────────────────────
-        Self::perform_handshake(&mut ws_client).await?;
-
-        // ── Subscribe ─────────────────────────────────────────────
+        // The subscription frame is reused on every reconnect: the server does
+        // not persist subscriptions across disconnects.
         let sub = frame_socketio_event(
             "subscribe_market_prices",
-            &serde_json::json!({"marketSlugs": [market_slug]}),
+            &serde_json::json!({ "marketSlugs": [market_slug] }),
         );
-        ws_client
-            .stream()
-            .send(WsMessage::Text(sub.into()))
-            .await
-            .map_err(|e| LimitlessError::Base(format!("Failed to send subscription: {}", e)))?;
-        debug!("Subscribed to market prices for: {}", market_slug);
 
-        // ── Event loop with typed dispatch ────────────────────────
-        Self::typed_event_loop(&mut ws_client, &mut handler, None).await?;
-        Ok(())
+        let mut delay = Duration::from_secs(1);
+
+        loop {
+            let stream = match self.client.wss_connect(None, false, None).await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    warn!("WS connect failed for '{market_slug}': {e}; retrying in {delay:?}");
+                    tokio::time::sleep(delay).await;
+                    delay = next_backoff(delay);
+                    continue;
+                }
+            };
+
+            let mut ws_client = WsClient::new(stream);
+
+            let session_result: Result<(), LimitlessError> = async {
+                // ── Handshake ─────────────────────────────────────────
+                Self::perform_handshake(&mut ws_client).await?;
+
+                // ── Subscribe ─────────────────────────────────────────
+                ws_client
+                    .stream()
+                    .send(WsMessage::Text(sub.clone().into()))
+                    .await
+                    .map_err(|e| {
+                        LimitlessError::Base(format!("Failed to send subscription: {}", e))
+                    })?;
+                debug!("Subscribed to market prices for: {}", market_slug);
+
+                // ── Event loop with typed dispatch ────────────────────
+                Self::typed_event_loop(&mut ws_client, &mut handler, None).await
+            }
+            .await;
+
+            match session_result {
+                Ok(()) => trace!("WS session for '{market_slug}' ended cleanly"),
+                Err(e) => warn!("WS session for '{market_slug}' ended: {e}"),
+            }
+
+            warn!("Reconnecting '{market_slug}' stream in {delay:?}");
+            tokio::time::sleep(delay).await;
+            delay = next_backoff(delay);
+        }
     }
 
     /// Subscribe to the WebSocket event stream and receive typed [`WsEventKind`] events.
@@ -424,9 +477,10 @@ impl Stream {
 
     /// Subscribe to typed WebSocket events **with authentication**.
     ///
-    /// Like [`ws_subscribe_events`](Self::ws_subscribe_events) but sends the
-    /// `X-API-Key` header on the WebSocket upgrade request, enabling private
-    /// channels such as `positions` and `orderEvent`.
+    /// Like [`ws_subscribe_events`](Self::ws_subscribe_events) but signs the
+    /// handshake with HMAC credentials (`lmts-api-key` / `lmts-timestamp` /
+    /// `lmts-signature`), enabling private channels such as `positions` and
+    /// `orderEvent`.
     ///
     /// # Example
     ///
@@ -530,10 +584,12 @@ impl Stream {
         }
     }
 
-    /// Core event loop: reads WebSocket messages, dispatches to handler,
-    /// sends periodic pings, and processes outgoing subscription commands.
+    /// Core event loop: reads WebSocket messages, dispatches to handler, and
+    /// processes outgoing subscription commands.
     ///
     /// Performs the Socket.IO handshake before entering the main loop.
+    /// Server-initiated Engine.IO pings are answered with pongs; the client
+    /// never sends its own ping frames (per the WebSocket reference).
     pub(crate) async fn event_loop<F>(
         ws_client: &mut WsClient,
         mut handler: F,
@@ -546,8 +602,6 @@ impl Stream {
         Self::perform_handshake(ws_client).await?;
 
         // ── Main event loop ────────────────────────────────────────────
-        let mut last_ping = Instant::now();
-
         loop {
             tokio::select! {
                 // ── Incoming WebSocket message ─────────────────────────
@@ -597,25 +651,13 @@ impl Stream {
                         }
                     }
                 }
-
-                // ── Periodic Engine.IO ping ────────────────────────────
-                _ = tokio::time::sleep(PING_INTERVAL) => {
-                    let now = Instant::now();
-                    if now.duration_since(last_ping) >= PING_INTERVAL {
-                        // Send Engine.IO ping (the string "2")
-                        let _ = ws_client
-                            .stream()
-                            .send(WsMessage::Text(String::from("2").into()))
-                            .await;
-                        last_ping = now;
-                    }
-                }
             }
         }
     }
 
     /// Typed event loop: like `event_loop` but calls a `FnMut(&str, &Value)`
-    /// handler instead of `FnMut(Value)`.
+    /// handler instead of `FnMut(Value)`. Server-initiated Engine.IO pings are
+    /// answered with pongs; the client never sends its own ping frames.
     pub(crate) async fn typed_event_loop<F>(
         ws_client: &mut WsClient,
         handler: &mut F,
@@ -624,8 +666,6 @@ impl Stream {
     where
         F: FnMut(&str, &Value) -> Result<(), LimitlessError> + 'static + Send,
     {
-        let mut last_ping = Instant::now();
-
         loop {
             tokio::select! {
                 // ── Incoming WebSocket message ─────────────────────────
@@ -689,18 +729,6 @@ impl Stream {
                         {
                             error!("Failed to send command: {}", e);
                         }
-                    }
-                }
-
-                // ── Periodic Engine.IO ping ────────────────────────────
-                _ = tokio::time::sleep(PING_INTERVAL) => {
-                    let now = Instant::now();
-                    if now.duration_since(last_ping) >= PING_INTERVAL {
-                        let _ = ws_client
-                            .stream()
-                            .send(WsMessage::Text(String::from("2").into()))
-                            .await;
-                        last_ping = now;
                     }
                 }
             }
@@ -775,4 +803,9 @@ impl Limitless for Stream {
             client: Client::new(api_key, secret, config.rest_api_endpoint.to_string()),
         }
     }
+}
+
+/// Exponential backoff for WS reconnects: double the delay up to a 30s cap.
+fn next_backoff(delay: Duration) -> Duration {
+    (delay * 2).min(Duration::from_secs(30))
 }

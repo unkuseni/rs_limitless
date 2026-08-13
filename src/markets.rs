@@ -136,6 +136,59 @@ impl Markets {
         let request = build_request(&params);
         self.client.get("markets/search", Some(request)).await
     }
+
+    /// Get the timeline for a recurring market series, anchored on a slug.
+    ///
+    /// Returns the current slot, the next slot, and a batch of slots around
+    /// the anchor so you can pre-fetch upcoming slots before they open.
+    pub async fn get_market_timeline(
+        &self,
+        slug: &str,
+        before: Option<u64>,
+        after: Option<u64>,
+    ) -> Result<MarketTimelineResponse, LimitlessError> {
+        let mut params = BTreeMap::new();
+        if let Some(v) = before {
+            params.insert("before".into(), v.to_string());
+        }
+        if let Some(v) = after {
+            params.insert("after".into(), v.to_string());
+        }
+        let request = build_request(&params);
+        let path = format!("markets/{}/timeline", slug);
+        self.client.get(&path, Some(request)).await
+    }
+
+    /// Get the global timeline for a recurring market series, anchored by
+    /// symbol and frequency.
+    ///
+    /// * `symbol` — underlying symbol, e.g. `BTC`.
+    /// * `frequency` — `minutely`, `hourly`, `daily`, or `weekly`.
+    /// * `sub_frequency` — slot size (required for `minutely` / `hourly`),
+    ///   e.g. `minutes_5`, `minutes_15`, `hours_1`.
+    pub async fn get_global_timeline(
+        &self,
+        symbol: &str,
+        frequency: &str,
+        sub_frequency: Option<&str>,
+        before: Option<u64>,
+        after: Option<u64>,
+    ) -> Result<MarketTimelineResponse, LimitlessError> {
+        let mut params = BTreeMap::new();
+        params.insert("symbol".into(), symbol.to_string());
+        params.insert("frequency".into(), frequency.to_string());
+        if let Some(ref v) = sub_frequency {
+            params.insert("subFrequency".into(), v.to_string());
+        }
+        if let Some(v) = before {
+            params.insert("before".into(), v.to_string());
+        }
+        if let Some(v) = after {
+            params.insert("after".into(), v.to_string());
+        }
+        let request = build_request(&params);
+        self.client.get("markets/timeline", Some(request)).await
+    }
 }
 
 impl Limitless for Markets {

@@ -62,6 +62,8 @@ pub enum SubscriptionChannel {
     LiveEsports,
     /// Market creation / resolution events (`marketLifecycle`).
     MarketLifecycle,
+    /// Unrealized PnL leaderboard invalidation hint (`unrealizedPnlProjectionChanged`).
+    UnrealizedPnlProjectionChanged,
 
     // ── Client → Server subscription requests ──
     /// Subscribe to AMM prices + CLOB orderbook.
@@ -80,6 +82,10 @@ pub enum SubscriptionChannel {
     SubscribeMarketLifecycle,
     /// Unsubscribe from market lifecycle events.
     UnsubscribeMarketLifecycle,
+    /// Subscribe to Unrealized PnL leaderboard invalidation hints.
+    SubscribeUnrealizedPnl,
+    /// Unsubscribe from Unrealized PnL invalidation hints.
+    UnsubscribeUnrealizedPnl,
 }
 
 impl SubscriptionChannel {
@@ -98,6 +104,7 @@ impl SubscriptionChannel {
             Self::LiveSports => "liveSports",
             Self::LiveEsports => "liveEsports",
             Self::MarketLifecycle => "marketLifecycle",
+            Self::UnrealizedPnlProjectionChanged => "unrealizedPnlProjectionChanged",
             Self::SubscribeMarketPrices => "subscribe_market_prices",
             Self::SubscribePositions => "subscribe_positions",
             Self::SubscribeTransactions => "subscribe_transactions",
@@ -106,6 +113,8 @@ impl SubscriptionChannel {
             Self::SubscribeLiveEsports => "subscribe_live_esports",
             Self::SubscribeMarketLifecycle => "subscribe_market_lifecycle",
             Self::UnsubscribeMarketLifecycle => "unsubscribe_market_lifecycle",
+            Self::SubscribeUnrealizedPnl => "subscribe_unrealized_pnl",
+            Self::UnsubscribeUnrealizedPnl => "unsubscribe_unrealized_pnl",
         }
     }
 }
@@ -148,6 +157,52 @@ pub struct SubscriptionOptions {
     /// Arbitrary server-side filters (channel-dependent).
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     pub filters: BTreeMap<String, Value>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Unrealized PnL subscription
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Payload for `subscribe_unrealized_pnl` / `unsubscribe_unrealized_pnl`.
+///
+/// Two scopes are available: one leaderboard per open market (`MARKET`,
+/// with a `market_id`), and the global biggest-open-positions list
+/// (`BIGGEST_POSITIONS`). At most 50 `MARKET` scopes per connection.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UnrealizedPnlSubscription {
+    /// Message schema version (currently `1`).
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: i64,
+    /// `MARKET` or `BIGGEST_POSITIONS`.
+    pub scope: String,
+    /// Market id — required for `MARKET` scope.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "marketId")]
+    pub market_id: Option<i64>,
+}
+
+impl UnrealizedPnlSubscription {
+    /// A `MARKET`-scope subscription for one market's leaderboard.
+    pub fn market(market_id: i64) -> Self {
+        Self {
+            schema_version: 1,
+            scope: "MARKET".to_string(),
+            market_id: Some(market_id),
+        }
+    }
+
+    /// The `BIGGEST_POSITIONS`-scope subscription.
+    pub fn biggest_positions() -> Self {
+        Self {
+            schema_version: 1,
+            scope: "BIGGEST_POSITIONS".to_string(),
+            market_id: None,
+        }
+    }
+
+    /// Serialize this subscription to the JSON payload used in the event frame.
+    pub fn to_value(&self) -> Value {
+        serde_json::to_value(self).unwrap_or(Value::Null)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -270,10 +325,15 @@ pub enum WsEventKind {
     MarketCreatedEvent(MarketCreatedEvent),
     /// Market resolution event (`marketResolved`).
     MarketResolvedEvent(MarketResolvedEvent),
-    /// Portfolio position update — raw payload (`positions`, requires auth).
-    Positions(Value),
-    /// OME state / settlement result — raw payload (`orderEvent`, requires auth).
-    OrderEvent(Value),
+    /// Unrealized PnL leaderboard invalidation hint
+    /// (`unrealizedPnlProjectionChanged`).
+    UnrealizedPnlProjectionChanged(UnrealizedPnlProjectionHint),
+    /// Portfolio position update (`positions`, requires auth) — typed by
+    /// market type (`AMM` / `CLOB`).
+    Positions(PositionUpdate),
+    /// OME state / settlement result (`orderEvent`, requires auth) — typed by
+    /// `source` (`OME` / `SETTLEMENT`).
+    OrderEvent(OrderEventData),
     /// Live sports data — raw payload (`liveSports`).
     LiveSports(Value),
     /// Live esports data — raw payload (`liveEsports`).
@@ -287,6 +347,24 @@ pub enum WsEventKind {
     /// Server error — raw payload (`error`). Emitted for e.g. "All requested markets are resolved".
     Error(Value),
     /// Unknown / unrecognized event with its raw payload.
+    Unknown(Value),
+}
+
+/// A typed `orderEvent` payload, discriminated by the `source` field.
+///
+/// * `OME` — off-chain matching-engine updates: lifecycle state changes
+///   (`PLACEMENT` / `UPDATE` / `CANCELLATION`) and the terminal result of an
+///   immediate-or-cancel order (`EXECUTION`).
+/// * `SETTLEMENT` — settlement lifecycle: provisional `MATCHED`, then
+///   terminal `MINED` / `FAILED`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OrderEventData {
+    /// Off-chain matching engine update.
+    Ome(Box<OmeEvent>),
+    /// On-chain settlement lifecycle event.
+    Settlement(Box<SettlementEvent>),
+    /// Unrecognized `source` — raw payload preserved.
     Unknown(Value),
 }
 
@@ -326,8 +404,29 @@ pub fn deserialize_event(event: &str, payload: &Value) -> Option<WsEventKind> {
         "marketResolved" => serde_json::from_value::<MarketResolvedEvent>(payload.clone())
             .ok()
             .map(WsEventKind::MarketResolvedEvent),
-        "positions" => Some(WsEventKind::Positions(payload.clone())),
-        "orderEvent" => Some(WsEventKind::OrderEvent(payload.clone())),
+        "unrealizedPnlProjectionChanged" => {
+            serde_json::from_value::<UnrealizedPnlProjectionHint>(payload.clone())
+                .ok()
+                .map(WsEventKind::UnrealizedPnlProjectionChanged)
+        }
+        "positions" => serde_json::from_value::<PositionUpdate>(payload.clone())
+            .ok()
+            .map(WsEventKind::Positions)
+            .or_else(|| Some(WsEventKind::Unknown(payload.clone()))),
+        "orderEvent" => {
+            let parsed = match payload.get("source").and_then(Value::as_str) {
+                Some("OME") => serde_json::from_value::<OmeEvent>(payload.clone())
+                    .ok()
+                    .map(|e| OrderEventData::Ome(Box::new(e))),
+                Some("SETTLEMENT") => serde_json::from_value::<SettlementEvent>(payload.clone())
+                    .ok()
+                    .map(|e| OrderEventData::Settlement(Box::new(e))),
+                _ => None,
+            };
+            Some(WsEventKind::OrderEvent(
+                parsed.unwrap_or_else(|| OrderEventData::Unknown(payload.clone())),
+            ))
+        }
         "liveSports" => Some(WsEventKind::LiveSports(payload.clone())),
         "liveEsports" => Some(WsEventKind::LiveEsports(payload.clone())),
         "system" => serde_json::from_value::<SystemEvent>(payload.clone())
@@ -441,17 +540,12 @@ pub struct MarketUpdateEvent {
 
 // ── AMM prices ───────────────────────────────────────────────────────────
 
-/// A per-market AMM price entry within a `NewPriceData` payload.
+/// The `updatedPrices` object in a `newPriceData` payload: the YES and NO
+/// prices of the market (string-encoded decimals on the wire).
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AmmPriceEntry {
-    #[serde(rename = "marketId")]
-    pub market_id: i32,
-    #[serde(rename = "marketAddress")]
-    pub market_address: String,
-    #[serde(rename = "yesPrice")]
-    pub yes_price: f64,
-    #[serde(rename = "noPrice")]
-    pub no_price: f64,
+pub struct UpdatedPrices {
+    pub yes: FlexFloat,
+    pub no: FlexFloat,
 }
 
 /// Server-emitted AMM price update (the `newPriceData` event).
@@ -460,7 +554,7 @@ pub struct NewPriceData {
     #[serde(rename = "marketAddress")]
     pub market_address: String,
     #[serde(rename = "updatedPrices")]
-    pub updated_prices: Vec<AmmPriceEntry>,
+    pub updated_prices: UpdatedPrices,
     #[serde(rename = "blockNumber")]
     pub block_number: i64,
     pub timestamp: Value,
@@ -553,6 +647,37 @@ pub struct SystemEvent {
     pub markets: Option<Vec<String>>,
 }
 
+// ── Unrealized PnL projection hint ────────────────────────────────────────
+
+/// Invalidation hint delivered to `subscribe_unrealized_pnl` subscribers.
+///
+/// Carries no leaderboard rows — refetch the matching REST route
+/// (`GET /leaderboard/pnl/unrealized/markets/{marketId}` or
+/// `GET /leaderboard/pnl/unrealized/biggest-positions`) when it arrives.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UnrealizedPnlProjectionHint {
+    #[serde(rename = "schemaVersion", default)]
+    pub schema_version: Option<i64>,
+    /// `MARKET` or `BIGGEST_POSITIONS`.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Market id — present on `MARKET` scope only.
+    #[serde(rename = "marketId", default)]
+    pub market_id: Option<i64>,
+    /// Readiness of the projection you'll read on refetch
+    /// (`READY`, `STALE`, `BUILDING`, or `DEGRADED`).
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(rename = "projectionVersion", default)]
+    pub projection_version: Option<String>,
+    #[serde(rename = "scopeVersion", default)]
+    pub scope_version: Option<String>,
+    #[serde(rename = "presentationVersion", default)]
+    pub presentation_version: Option<String>,
+    #[serde(rename = "asOf", default)]
+    pub as_of: Option<String>,
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  Helpers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -616,6 +741,9 @@ pub fn channel_from_key(key: &str) -> Option<SubscriptionChannel> {
         "liveSports" => Some(SubscriptionChannel::LiveSports),
         "liveEsports" => Some(SubscriptionChannel::LiveEsports),
         "marketLifecycle" => Some(SubscriptionChannel::MarketLifecycle),
+        "unrealizedPnlProjectionChanged" => {
+            Some(SubscriptionChannel::UnrealizedPnlProjectionChanged)
+        }
         "subscribe_market_prices" => Some(SubscriptionChannel::SubscribeMarketPrices),
         "subscribe_positions" => Some(SubscriptionChannel::SubscribePositions),
         "subscribe_transactions" => Some(SubscriptionChannel::SubscribeTransactions),
@@ -624,6 +752,8 @@ pub fn channel_from_key(key: &str) -> Option<SubscriptionChannel> {
         "subscribe_live_esports" => Some(SubscriptionChannel::SubscribeLiveEsports),
         "subscribe_market_lifecycle" => Some(SubscriptionChannel::SubscribeMarketLifecycle),
         "unsubscribe_market_lifecycle" => Some(SubscriptionChannel::UnsubscribeMarketLifecycle),
+        "subscribe_unrealized_pnl" => Some(SubscriptionChannel::SubscribeUnrealizedPnl),
+        "unsubscribe_unrealized_pnl" => Some(SubscriptionChannel::UnsubscribeUnrealizedPnl),
         _ => None,
     }
 }
@@ -752,6 +882,7 @@ mod tests {
             "liveSports",
             "liveEsports",
             "marketLifecycle",
+            "unrealizedPnlProjectionChanged",
         ];
         for &event in &server_events {
             assert!(
@@ -759,5 +890,115 @@ mod tests {
                 "missing channel variant for server event '{event}'"
             );
         }
+    }
+
+    #[test]
+    fn new_price_data_parses_documented_shape() {
+        let json = r#"{
+            "marketAddress": "0x1234...",
+            "updatedPrices": { "yes": "0.65", "no": "0.35" },
+            "blockNumber": 12345678,
+            "timestamp": "2024-01-01T00:00:00.000Z"
+        }"#;
+        let parsed: NewPriceData = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.market_address, "0x1234...");
+        assert!((parsed.updated_prices.yes.float64() - 0.65).abs() < f64::EPSILON);
+        assert!((parsed.updated_prices.no.float64() - 0.35).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn order_event_dispatches_by_source() {
+        let ome = serde_json::json!({
+            "source": "OME", "type": "PLACEMENT", "eventId": 1234567,
+            "orderId": "550e8400-e29b-41d4-a716-446655440000",
+            "userId": 42, "marketId": "17", "token": "878930",
+            "side": "BUY", "price": 0.53, "remainingSize": 100,
+            "timestamp": "2026-04-20T10:15:30.000Z"
+        });
+        match deserialize_event("orderEvent", &ome) {
+            Some(WsEventKind::OrderEvent(OrderEventData::Ome(e))) => {
+                assert_eq!(e.event_type, "PLACEMENT");
+            }
+            other => panic!("unexpected dispatch: {other:?}"),
+        }
+
+        let settlement = serde_json::json!({
+            "source": "SETTLEMENT", "type": "MATCHED",
+            "eventId": "matched:77985c10:d45b884d",
+            "tradeEventId": "77985c10", "orderId": "d45b884d",
+            "takerOrderId": "d45b884d", "marketSlug": "will-abc-happen-by-2026",
+            "tokenId": "27102822276156300166", "token": "NO", "side": "BUY",
+            "price": "0.53", "amountContracts": "25", "amountCollateral": "13.25",
+            "configuredFeeRateBps": 30, "effectiveFeeBps": 27,
+            "feeAmountContracts": "0.0675", "isEstimate": true,
+            "timestamp": "2026-04-20T10:15:40.000Z"
+        });
+        match deserialize_event("orderEvent", &settlement) {
+            Some(WsEventKind::OrderEvent(OrderEventData::Settlement(e))) => {
+                assert_eq!(e.event_type, "MATCHED");
+                assert_eq!(e.is_estimate, Some(true));
+                assert_eq!(e.user_id, None);
+                assert_eq!(e.trade_event_id.as_deref(), Some("77985c10"));
+            }
+            other => panic!("unexpected dispatch: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn positions_dispatches_by_market_type() {
+        let amm = serde_json::json!({
+            "account": "0xabcd...", "marketAddress": "0x1234...",
+            "positions": [{
+                "tokenId": "123456", "balance": "1000000",
+                "outcomeIndex": 0, "collateralOutOnSell": "950000"
+            }],
+            "type": "AMM"
+        });
+        match deserialize_event("positions", &amm) {
+            Some(WsEventKind::Positions(PositionUpdate::Amm(p))) => {
+                assert_eq!(p.market_address, "0x1234...");
+                assert_eq!(p.positions.len(), 1);
+            }
+            other => panic!("unexpected dispatch: {other:?}"),
+        }
+
+        let clob = serde_json::json!({
+            "account": "0xabcd...", "marketSlug": "btc-100k-weekly",
+            "positions": [{
+                "tokenId": "19633204485790", "ctfBalance": "10000000",
+                "averageFillPrice": "0.65", "costBasis": "6500000",
+                "marketValue": "7000000", "marketId": 7348
+            }],
+            "tokenIds": ["19633204485790"],
+            "timestamp": 1783728000000i64,
+            "type": "CLOB"
+        });
+        match deserialize_event("positions", &clob) {
+            Some(WsEventKind::Positions(PositionUpdate::Clob(p))) => {
+                assert_eq!(p.market_slug, "btc-100k-weekly");
+                assert_eq!(p.timestamp, Some(1783728000000));
+            }
+            other => panic!("unexpected dispatch: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unrealized_pnl_subscription_serializes() {
+        let market = UnrealizedPnlSubscription::market(7348);
+        let value = market.to_value();
+        assert_eq!(value["scope"], "MARKET");
+        assert_eq!(value["marketId"], 7348);
+        assert_eq!(value["schemaVersion"], 1);
+
+        let biggest = UnrealizedPnlSubscription::biggest_positions();
+        let value = biggest.to_value();
+        assert_eq!(value["scope"], "BIGGEST_POSITIONS");
+        assert!(value.get("marketId").is_none());
+    }
+
+    #[test]
+    fn no_payload_frame_has_single_element_array() {
+        let frame = crate::ws::stream::frame_socketio_event_no_payload("subscribe_order_events");
+        assert_eq!(frame, "42/markets,[\"subscribe_order_events\"]");
     }
 }

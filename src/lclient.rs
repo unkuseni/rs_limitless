@@ -24,8 +24,12 @@
 //!     let positions = api.get_positions().await?;
 //!
 //!     // Authenticated: place a limit buy — one call does it all
+//!     let private_key = "0xYourPrivateKey...";
+//!     let token_id = "1234567890";
+//!     let owner_id = 42; // from GET /profiles/me
 //!     api.buy_gtc(private_key, "btc-above-100k", token_id, 0.51, 10.0, owner_id).await?;
 //!
+//!     let _ = (active, ob, positions);
 //!     Ok(())
 //! }
 //! ```
@@ -121,20 +125,24 @@ impl LimitlessClient {
 
     /// Access the raw [`Trader`] manager.
     pub fn trader(&self) -> Trader {
-        Trader::new_with_config(
+        let mut trader = Trader::new_with_config(
             &self.config,
             self.client.api_key.clone(),
             self.client.secret_key.clone(),
-        )
+        );
+        trader.client.on_behalf_of = self.client.on_behalf_of;
+        trader
     }
 
     /// Access the raw [`Portfolio`] manager.
     pub fn portfolio(&self) -> Portfolio {
-        Portfolio::new_with_config(
+        let mut portfolio = Portfolio::new_with_config(
             &self.config,
             self.client.api_key.clone(),
             self.client.secret_key.clone(),
-        )
+        );
+        portfolio.client.on_behalf_of = self.client.on_behalf_of;
+        portfolio
     }
 
     /// Access the raw [`Navigation`] manager.
@@ -153,6 +161,83 @@ impl LimitlessClient {
             self.client.api_key.clone(),
             self.client.secret_key.clone(),
         )
+    }
+
+    /// Access the raw [`PartnerAccounts`] manager for sub-account management.
+    pub fn partner(&self) -> PartnerAccounts {
+        PartnerAccounts::new_with_config(
+            &self.config,
+            self.client.api_key.clone(),
+            self.client.secret_key.clone(),
+        )
+    }
+
+    /// Access the raw [`Amm`] manager for server-wallet AMM trading.
+    pub fn amm(&self) -> Amm {
+        Amm::new_with_config(
+            &self.config,
+            self.client.api_key.clone(),
+            self.client.secret_key.clone(),
+        )
+    }
+
+    /// Access the raw [`System`] manager for maintenance status.
+    pub fn system(&self) -> System {
+        System::new_with_config(
+            &self.config,
+            self.client.api_key.clone(),
+            self.client.secret_key.clone(),
+        )
+    }
+
+    /// Access the raw [`Referral`] manager.
+    pub fn referral(&self) -> Referral {
+        Referral::new_with_config(
+            &self.config,
+            self.client.api_key.clone(),
+            self.client.secret_key.clone(),
+        )
+    }
+
+    /// Access the raw [`Leaderboard`] manager.
+    pub fn leaderboard(&self) -> Leaderboard {
+        Leaderboard::new_with_config(
+            &self.config,
+            self.client.api_key.clone(),
+            self.client.secret_key.clone(),
+        )
+    }
+
+    /// Access the raw [`ApiTokens`] manager for scoped token management.
+    pub fn api_tokens(&self) -> ApiTokens {
+        ApiTokens::new_with_config(
+            &self.config,
+            self.client.api_key.clone(),
+            self.client.secret_key.clone(),
+        )
+    }
+
+    /// Return a clone of this client whose signed requests carry the
+    /// `x-on-behalf-of` header for the given sub-account profile ID.
+    ///
+    /// Partner read flow: `GET /portfolio/positions`, `GET /portfolio/history`,
+    /// `GET /markets/:slug/user-orders`, and `POST /orders/status/batch` then
+    /// return the sub-account's data. Requires the `delegated_signing` scope.
+    ///
+    /// ```no_run
+    /// use limitless::prelude::*;
+    ///
+    /// # async fn example(api: LimitlessClient) -> Result<(), LimitlessError> {
+    /// let sub = api.for_sub_account(1292711);
+    /// let positions = sub.get_positions().await?;   // sub-account's positions
+    /// let history = sub.get_history(None, Some(10), None).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn for_sub_account(&self, profile_id: u64) -> Self {
+        let mut cloned = self.clone();
+        cloned.client = cloned.client.with_on_behalf(Some(profile_id));
+        cloned
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -232,6 +317,32 @@ impl LimitlessClient {
             .await
     }
 
+    /// Get the timeline for a recurring market series, anchored on a slug.
+    pub async fn get_market_timeline(
+        &self,
+        slug: &str,
+        before: Option<u64>,
+        after: Option<u64>,
+    ) -> Result<MarketTimelineResponse, LimitlessError> {
+        self.markets()
+            .get_market_timeline(slug, before, after)
+            .await
+    }
+
+    /// Get the global timeline for a recurring market series by symbol and frequency.
+    pub async fn get_global_timeline(
+        &self,
+        symbol: &str,
+        frequency: &str,
+        sub_frequency: Option<&str>,
+        before: Option<u64>,
+        after: Option<u64>,
+    ) -> Result<MarketTimelineResponse, LimitlessError> {
+        self.markets()
+            .get_global_timeline(symbol, frequency, sub_frequency, before, after)
+            .await
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  Trading — orders, orderbook, cancels
     // ═══════════════════════════════════════════════════════════════════
@@ -266,6 +377,30 @@ impl LimitlessClient {
         request_body: &str,
     ) -> Result<CancelBatchResponse, LimitlessError> {
         self.trader().cancel_batch(request_body).await
+    }
+
+    /// Cancel multiple orders by orderIds or clientOrderIds (combined batch).
+    pub async fn batch_cancel_combined(
+        &self,
+        request_body: &str,
+    ) -> Result<CancelBatchResponse, LimitlessError> {
+        self.trader().batch_cancel_combined(request_body).await
+    }
+
+    /// Cancel an order and place its replacement in one request.
+    pub async fn cancel_replace(
+        &self,
+        request_body: &str,
+    ) -> Result<CancelReplaceResponse, LimitlessError> {
+        self.trader().cancel_replace(request_body).await
+    }
+
+    /// Submit up to 4 cancel-and-replace operations in one request.
+    pub async fn cancel_replace_batch(
+        &self,
+        request_body: &str,
+    ) -> Result<CancelReplaceBatchResponse, LimitlessError> {
+        self.trader().cancel_replace_batch(request_body).await
     }
 
     /// Cancel a single order by internal orderId.
@@ -388,6 +523,69 @@ impl LimitlessClient {
             .await
     }
 
+    /// Place a FAK buy order — one call does it all.
+    pub async fn buy_fak(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        price: f64,
+        size: f64,
+        owner_id: u64,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.trader()
+            .buy_fak(private_key, market_slug, token_id, price, size, owner_id)
+            .await
+    }
+
+    /// Place a FAK sell order — one call does it all.
+    pub async fn sell_fak(
+        &self,
+        private_key: &str,
+        market_slug: &str,
+        token_id: &str,
+        price: f64,
+        size: f64,
+        owner_id: u64,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.trader()
+            .sell_fak(private_key, market_slug, token_id, price, size, owner_id)
+            .await
+    }
+
+    /// Place a **delegated** (unsigned) order for a server-wallet sub-account.
+    ///
+    /// The server signs with the sub-account's managed Privy wallet — no
+    /// private key is needed. Requires the `trading` + `delegated_signing`
+    /// scopes. GTC/FAK orders take `price` + `size`; FOK orders take `amount`
+    /// (USDC to spend for BUY, shares to sell for SELL).
+    pub async fn place_delegated_order(
+        &self,
+        wallet_address: &str,
+        market_slug: &str,
+        token_id: &str,
+        side: OrderSide,
+        order_type: OrderType,
+        price: Option<f64>,
+        size: Option<f64>,
+        amount: Option<f64>,
+        sub_account_id: u64,
+    ) -> Result<CreateOrderResponse, LimitlessError> {
+        self.trader()
+            .place_delegated_order(
+                wallet_address,
+                market_slug,
+                token_id,
+                side,
+                order_type,
+                price,
+                size,
+                amount,
+                sub_account_id,
+            )
+            .await
+    }
+
     /// Cancel all open orders in a market (convenience alias).
     pub async fn cancel_all(&self, slug: &str) -> Result<CancelAllResponse, LimitlessError> {
         self.trader().cancel_all(slug).await
@@ -396,6 +594,31 @@ impl LimitlessClient {
     // ═══════════════════════════════════════════════════════════════════
     //  Portfolio — profile, positions, PnL, history
     // ═══════════════════════════════════════════════════════════════════
+
+    /// Get the authenticated caller's private profile without passing an address.
+    pub async fn get_current_profile(&self) -> Result<ProfileResponse, LimitlessError> {
+        self.portfolio().get_current_profile().await
+    }
+
+    /// Update the authenticated profile (`PUT /profiles`).
+    pub async fn update_profile(
+        &self,
+        request_body: &str,
+    ) -> Result<ProfileResponse, LimitlessError> {
+        self.portfolio().update_profile(request_body).await
+    }
+
+    /// Switch the profile's trading wallet mode (`PUT /profiles`).
+    ///
+    /// Self-signed API orders require EOA mode — call
+    /// `set_trading_wallet_mode(TradingWalletMode::Eoa)` if the account ever
+    /// enabled 1-click (smart wallet) trading.
+    pub async fn set_trading_wallet_mode(
+        &self,
+        mode: TradingWalletMode,
+    ) -> Result<ProfileResponse, LimitlessError> {
+        self.portfolio().set_trading_wallet_mode(mode).await
+    }
 
     /// Get your own profile by wallet address.
     pub async fn get_profile(&self, account: &str) -> Result<ProfileResponse, LimitlessError> {
@@ -425,13 +648,58 @@ impl LimitlessClient {
         self.portfolio().get_points().await
     }
 
-    /// Get cursor-paginated portfolio history.
+    /// Get cursor-paginated portfolio history, optionally filtered by market.
     pub async fn get_history(
         &self,
         cursor: Option<&str>,
         limit: Option<u64>,
+        market: Option<&str>,
     ) -> Result<HistoryResponse, LimitlessError> {
-        self.portfolio().get_history(cursor, limit).await
+        self.portfolio().get_history(cursor, limit, market).await
+    }
+
+    /// Get another user's trading history (public — no authentication).
+    pub async fn get_public_history(
+        &self,
+        account: &str,
+        cursor: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<HistoryResponse, LimitlessError> {
+        self.portfolio()
+            .get_public_history(account, cursor, limit)
+            .await
+    }
+
+    /// Redeem resolved conditional-token positions from a server-wallet sub-account.
+    pub async fn redeem(&self, request_body: &str) -> Result<Value, LimitlessError> {
+        self.portfolio().redeem(request_body).await
+    }
+
+    /// Transfer ERC20 funds from a managed server wallet.
+    pub async fn withdraw(&self, request_body: &str) -> Result<Value, LimitlessError> {
+        self.portfolio().withdraw(request_body).await
+    }
+
+    /// Add a withdrawal destination allowlist entry (Privy identity token).
+    pub async fn add_withdrawal_address(
+        &self,
+        identity_token: &str,
+        request_body: &str,
+    ) -> Result<WithdrawalAddressResponse, LimitlessError> {
+        self.portfolio()
+            .add_withdrawal_address(identity_token, request_body)
+            .await
+    }
+
+    /// Remove a withdrawal destination allowlist entry (Privy identity token).
+    pub async fn delete_withdrawal_address(
+        &self,
+        identity_token: &str,
+        address: &str,
+    ) -> Result<Value, LimitlessError> {
+        self.portfolio()
+            .delete_withdrawal_address(identity_token, address)
+            .await
     }
 
     /// Check USDC allowance for CLOB or NegRisk trading.
@@ -493,6 +761,198 @@ impl LimitlessClient {
         self.navigation()
             .list_property_options(key_id, parent_id)
             .await
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Partner — sub-account management (HMAC, scoped tokens)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Create a partner sub-account (server wallet or EOA verification).
+    pub async fn create_sub_account(&self, request_body: &str) -> Result<Value, LimitlessError> {
+        self.partner().create_sub_account(request_body).await
+    }
+
+    /// List partner-owned sub-accounts, or recover one by account address.
+    pub async fn list_partner_accounts(
+        &self,
+        account: Option<&str>,
+        limit: Option<u64>,
+        page: Option<u64>,
+    ) -> Result<ListPartnerAccountsResponse, LimitlessError> {
+        self.partner().list_accounts(account, limit, page).await
+    }
+
+    /// Inspect delegated-trading allowance readiness for a sub-account.
+    pub async fn check_partner_allowances(
+        &self,
+        profile_id: &str,
+    ) -> Result<Value, LimitlessError> {
+        self.partner().check_allowances(profile_id).await
+    }
+
+    /// Retry delegated-trading allowance recovery for a sub-account.
+    pub async fn retry_partner_allowances(
+        &self,
+        profile_id: &str,
+    ) -> Result<Value, LimitlessError> {
+        self.partner().retry_allowances(profile_id).await
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  API Tokens — scoped token management (Privy identity + HMAC)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Check partner capability configuration (Privy identity token).
+    pub async fn get_api_token_capabilities(
+        &self,
+        identity_token: &str,
+    ) -> Result<Value, LimitlessError> {
+        self.api_tokens().get_capabilities(identity_token).await
+    }
+
+    /// Derive a new scoped API token (Privy identity token).
+    ///
+    /// The returned secret is shown once — store it securely.
+    pub async fn derive_api_token(
+        &self,
+        identity_token: &str,
+        request: &DeriveApiTokenRequest,
+    ) -> Result<DeriveApiTokenResponse, LimitlessError> {
+        self.api_tokens()
+            .derive_token(identity_token, request)
+            .await
+    }
+
+    /// List all active (non-revoked) API tokens.
+    pub async fn list_api_tokens(&self) -> Result<Value, LimitlessError> {
+        self.api_tokens().list_tokens().await
+    }
+
+    /// Revoke an active API token by token ID.
+    pub async fn revoke_api_token(&self, token_id: &str) -> Result<Value, LimitlessError> {
+        self.api_tokens().revoke_token(token_id).await
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  AMM — server-wallet AMM trading (HMAC: trading + delegated_signing)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Spend collateral to acquire outcome shares on an AMM market.
+    pub async fn amm_buy(
+        &self,
+        request: &AmmBuyRequest,
+    ) -> Result<AmmTradeResponse, LimitlessError> {
+        self.amm().buy(request).await
+    }
+
+    /// Return an exact amount of collateral by selling outcome shares.
+    pub async fn amm_sell(
+        &self,
+        request: &AmmSellRequest,
+    ) -> Result<AmmTradeResponse, LimitlessError> {
+        self.amm().sell(request).await
+    }
+
+    /// Read the on-chain approval state for an AMM market and side.
+    pub async fn amm_check_allowance(
+        &self,
+        request: &AmmAllowanceRequest,
+    ) -> Result<AmmAllowanceResponse, LimitlessError> {
+        self.amm().check_allowance(request).await
+    }
+
+    /// Submit a fresh approval from the server wallet.
+    pub async fn amm_approve_allowance(
+        &self,
+        request: &AmmAllowanceRequest,
+    ) -> Result<AmmAllowanceResponse, LimitlessError> {
+        self.amm().approve_allowance(request).await
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  System — maintenance status (public)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Get active and scheduled maintenance information.
+    pub async fn get_maintenance_status(
+        &self,
+        target: Option<&str>,
+    ) -> Result<MaintenanceStatus, LimitlessError> {
+        self.system().get_maintenance_status(target).await
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Referral — referral program earnings and leaderboards
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Get your own referral standing (volume basis, earned USDC, tier ladder).
+    pub async fn get_referral_stats(&self) -> Result<ReferralMeResponse, LimitlessError> {
+        self.referral().get_my_stats().await
+    }
+
+    /// Get your referred users, paginated, filtered, and sorted.
+    pub async fn get_referred_users(
+        &self,
+        limit: Option<u64>,
+        offset: Option<u64>,
+        status: Option<&str>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<ReferralReferralsResponse, LimitlessError> {
+        self.referral()
+            .get_referred_users(limit, offset, status, sort_by, sort_order)
+            .await
+    }
+
+    /// Get the global referral leaderboard (public).
+    pub async fn get_referral_leaderboard(
+        &self,
+        limit: Option<u64>,
+        offset: Option<u64>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<ReferralLeaderboardResponse, LimitlessError> {
+        self.referral()
+            .get_leaderboard(limit, offset, sort_by, sort_order)
+            .await
+    }
+
+    /// Get the friends referral leaderboard (public).
+    pub async fn get_friends_leaderboard(
+        &self,
+        limit: Option<u64>,
+        offset: Option<u64>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<ReferralLeaderboardResponse, LimitlessError> {
+        self.referral()
+            .get_friends_leaderboard(limit, offset, sort_by, sort_order)
+            .await
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Leaderboard — live Unrealized PnL (public)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Get the live Unrealized PnL leaderboard for one market.
+    pub async fn get_market_unrealized_pnl(
+        &self,
+        market_id: u64,
+        metric: Option<&str>,
+        limit: Option<u64>,
+        page: Option<u64>,
+    ) -> Result<UnrealizedPnlMarketResponse, LimitlessError> {
+        self.leaderboard()
+            .get_market_leaderboard(market_id, metric, limit, page)
+            .await
+    }
+
+    /// Get the live biggest-open-positions leaderboard.
+    pub async fn get_biggest_positions(
+        &self,
+        limit: Option<u64>,
+    ) -> Result<UnrealizedPnlBiggestPositionsResponse, LimitlessError> {
+        self.leaderboard().get_biggest_positions(limit).await
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -617,10 +1077,20 @@ impl LimitlessClientBuilder {
     }
 
     /// Use Base Sepolia testnet endpoints.
-    pub fn testnet(mut self, use_testnet: bool) -> Self {
+    ///
+    /// **Deprecated:** Limitless has no testnet, sandbox, or mock mode — all
+    /// integrations run against Base mainnet with real USDC. This method is
+    /// kept for backward compatibility and now maps to the production
+    /// endpoints.
+    #[deprecated(
+        note = "Limitless has no testnet deployment; all integrations run against Base mainnet. Use the default endpoints instead."
+    )]
+    pub fn testnet(self, use_testnet: bool) -> Self {
         if use_testnet {
-            self.rest_endpoint = Some("https://api.testnet.limitless.exchange".into());
-            self.ws_endpoint = Some("wss://ws.testnet.limitless.exchange/markets".into());
+            log::warn!(
+                "Limitless has no testnet deployment — testnet() is a no-op. \
+                 All integrations run against Base mainnet."
+            );
         }
         self
     }

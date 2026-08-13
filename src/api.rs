@@ -28,6 +28,14 @@ pub enum API {
     Partner(Partner),
     // ── Public Portfolio ──
     PublicPortfolio(PublicPortfolio),
+    // ── AMM Trading ──
+    Amm(AmmEndpoint),
+    // ── System ──
+    System(SystemEndpoint),
+    // ── Referral ──
+    Referral(ReferralEndpoint),
+    // ── Leaderboard ──
+    Leaderboard(LeaderboardEndpoint),
 }
 
 // ── Authentication ──
@@ -62,6 +70,10 @@ pub enum Market {
     FeedEvents,
     /// `GET /markets/search` — Semantic search for markets.
     Search,
+    /// `GET /markets/timeline` — Global upcoming recurring-market schedule.
+    GlobalTimeline,
+    /// `GET /markets/{slug}/timeline` — Schedule for a recurring market.
+    MarketTimeline,
 }
 
 // ── Trading ──
@@ -74,8 +86,14 @@ pub enum Trade {
     OrderStatusBatch,
     /// `POST /orders/cancel` — Cancel order (combined: by orderId or clientOrderId).
     CancelCombined,
-    /// `POST /orders/cancel-batch` — Batch cancel (by orderIds).
+    /// `POST /orders/batch-cancel` — Batch cancel (by orderIds or clientOrderIds).
+    CancelBatchCombined,
+    /// `POST /orders/cancel-batch` — Batch cancel (by orderIds, legacy).
     CancelBatch,
+    /// `POST /orders/cancel-replace` — Cancel an order and place a replacement.
+    CancelReplace,
+    /// `POST /orders/cancel-replace/batch` — Batch cancel-and-replace.
+    CancelReplaceBatch,
     /// `DELETE /orders/{orderId}` — Cancel a single order by ID.
     CancelOrder,
     /// `DELETE /orders/all/{slug}` — Cancel all orders in a market.
@@ -96,6 +114,8 @@ pub enum Trade {
 
 #[derive(Debug, Clone)]
 pub enum PortfolioEndpoint {
+    /// `GET /profiles/me` — Get the authenticated caller's private profile.
+    GetCurrentProfile,
     /// `GET /profiles/{account}` — Get your profile.
     GetProfile,
     /// `GET /portfolio/trades` — Get trades.
@@ -110,6 +130,14 @@ pub enum PortfolioEndpoint {
     History,
     /// `GET /portfolio/trading/allowance` — Trading allowance check.
     Allowance,
+    /// `POST /portfolio/redeem` — Redeem resolved server-wallet positions.
+    Redeem,
+    /// `POST /portfolio/withdraw` — Withdraw funds from a server wallet.
+    Withdraw,
+    /// `POST /portfolio/withdrawal-addresses` — Add a withdrawal address.
+    AddWithdrawalAddress,
+    /// `DELETE /portfolio/withdrawal-addresses/{address}` — Remove a withdrawal address.
+    DeleteWithdrawalAddress,
 }
 
 // ── Market Navigation ──
@@ -134,13 +162,13 @@ pub enum Nav {
 
 #[derive(Debug, Clone)]
 pub enum ApiToken {
-    /// `GET /api-tokens/capabilities` — Partner capabilities.
+    /// `GET /auth/api-tokens/capabilities` — Partner capabilities (Privy).
     GetCapabilities,
-    /// `POST /api-tokens/derive` — Derive a scoped token.
+    /// `POST /auth/api-tokens/derive` — Derive a scoped token (Privy).
     Derive,
-    /// `GET /api-tokens` — List active tokens.
+    /// `GET /auth/api-tokens` — List active tokens.
     ListActive,
-    /// `DELETE /api-tokens/{id}` — Revoke a token.
+    /// `DELETE /auth/api-tokens/{id}` — Revoke a token.
     Revoke,
 }
 
@@ -150,10 +178,58 @@ pub enum ApiToken {
 pub enum Partner {
     /// `POST /profiles/partner-accounts` — Create partner sub-account.
     CreateSubAccount,
+    /// `GET /profiles/partner-accounts` — List partner sub-accounts.
+    ListSubAccounts,
     /// `GET /profiles/partner-accounts/{id}/allowances` — Check allowances.
     CheckAllowances,
     /// `POST /profiles/partner-accounts/{id}/allowances/retry` — Retry allowances.
     RetryAllowances,
+}
+
+// ── AMM Trading ──
+
+#[derive(Debug, Clone)]
+pub enum AmmEndpoint {
+    /// `POST /amm/buy` — Buy outcome shares from a server wallet.
+    Buy,
+    /// `POST /amm/sell` — Sell outcome shares from a server wallet.
+    Sell,
+    /// `POST /amm/allowances/check` — Read on-chain approval state.
+    AllowancesCheck,
+    /// `POST /amm/allowances/approve` — Submit a fresh approval.
+    AllowancesApprove,
+}
+
+// ── System ──
+
+#[derive(Debug, Clone)]
+pub enum SystemEndpoint {
+    /// `GET /maintenance/status` — Active and scheduled maintenance.
+    MaintenanceStatus,
+}
+
+// ── Referral ──
+
+#[derive(Debug, Clone)]
+pub enum ReferralEndpoint {
+    /// `GET /referral/usdc/me` — Your referral standing.
+    MyStats,
+    /// `GET /referral/usdc/referrals` — Your referred users.
+    MyReferrals,
+    /// `GET /referral/usdc/leaderboard` — Global referral leaderboard.
+    Leaderboard,
+    /// `GET /referral/usdc/leaderboard-friends` — Friends referral leaderboard.
+    FriendsLeaderboard,
+}
+
+// ── Leaderboard ──
+
+#[derive(Debug, Clone)]
+pub enum LeaderboardEndpoint {
+    /// `GET /leaderboard/pnl/unrealized/markets/{marketId}` — Market Unrealized PnL.
+    UnrealizedPnlMarket,
+    /// `GET /leaderboard/pnl/unrealized/biggest-positions` — Biggest open positions.
+    BiggestPositions,
 }
 
 // ── Public Portfolio ──
@@ -194,12 +270,17 @@ impl AsRef<str> for API {
             API::Market(Market::OracleCandles) => "markets",
             API::Market(Market::FeedEvents) => "markets",
             API::Market(Market::Search) => "markets/search",
+            API::Market(Market::GlobalTimeline) => "markets/timeline",
+            API::Market(Market::MarketTimeline) => "markets",
 
             // Trading
             API::Trade(Trade::CreateOrder) => "orders",
             API::Trade(Trade::OrderStatusBatch) => "orders/status/batch",
             API::Trade(Trade::CancelCombined) => "orders/cancel",
+            API::Trade(Trade::CancelBatchCombined) => "orders/batch-cancel",
             API::Trade(Trade::CancelBatch) => "orders/cancel-batch",
+            API::Trade(Trade::CancelReplace) => "orders/cancel-replace",
+            API::Trade(Trade::CancelReplaceBatch) => "orders/cancel-replace/batch",
             API::Trade(Trade::CancelOrder) => "orders",
             API::Trade(Trade::CancelAll) => "orders/all",
             API::Trade(Trade::Orderbook) => "markets",
@@ -209,6 +290,7 @@ impl AsRef<str> for API {
             API::Trade(Trade::MarketEvents) => "markets",
 
             // Portfolio
+            API::PortfolioEndpoint(PortfolioEndpoint::GetCurrentProfile) => "profiles/me",
             API::PortfolioEndpoint(PortfolioEndpoint::GetProfile) => "profiles",
             API::PortfolioEndpoint(PortfolioEndpoint::Trades) => "portfolio/trades",
             API::PortfolioEndpoint(PortfolioEndpoint::Positions) => "portfolio/positions",
@@ -216,6 +298,14 @@ impl AsRef<str> for API {
             API::PortfolioEndpoint(PortfolioEndpoint::Points) => "portfolio/points",
             API::PortfolioEndpoint(PortfolioEndpoint::History) => "portfolio/history",
             API::PortfolioEndpoint(PortfolioEndpoint::Allowance) => "portfolio/trading/allowance",
+            API::PortfolioEndpoint(PortfolioEndpoint::Redeem) => "portfolio/redeem",
+            API::PortfolioEndpoint(PortfolioEndpoint::Withdraw) => "portfolio/withdraw",
+            API::PortfolioEndpoint(PortfolioEndpoint::AddWithdrawalAddress) => {
+                "portfolio/withdrawal-addresses"
+            }
+            API::PortfolioEndpoint(PortfolioEndpoint::DeleteWithdrawalAddress) => {
+                "portfolio/withdrawal-addresses"
+            }
 
             // Navigation
             API::Nav(Nav::GetNavigation) => "navigation",
@@ -226,13 +316,14 @@ impl AsRef<str> for API {
             API::Nav(Nav::ListPropertyOptions) => "property-keys",
 
             // API Tokens
-            API::ApiToken(ApiToken::GetCapabilities) => "api-tokens/capabilities",
-            API::ApiToken(ApiToken::Derive) => "api-tokens/derive",
-            API::ApiToken(ApiToken::ListActive) => "api-tokens",
-            API::ApiToken(ApiToken::Revoke) => "api-tokens", // id appended
+            API::ApiToken(ApiToken::GetCapabilities) => "auth/api-tokens/capabilities",
+            API::ApiToken(ApiToken::Derive) => "auth/api-tokens/derive",
+            API::ApiToken(ApiToken::ListActive) => "auth/api-tokens",
+            API::ApiToken(ApiToken::Revoke) => "auth/api-tokens", // id appended
 
             // Partner Accounts
             API::Partner(Partner::CreateSubAccount) => "profiles/partner-accounts",
+            API::Partner(Partner::ListSubAccounts) => "profiles/partner-accounts",
             API::Partner(Partner::CheckAllowances) => "profiles/partner-accounts", // appended
             API::Partner(Partner::RetryAllowances) => "profiles/partner-accounts", // appended
 
@@ -240,6 +331,31 @@ impl AsRef<str> for API {
             API::PublicPortfolio(PublicPortfolio::TradedVolume) => "public/portfolio", // appended
             API::PublicPortfolio(PublicPortfolio::Positions) => "public/portfolio",    // appended
             API::PublicPortfolio(PublicPortfolio::PnlChart) => "public/portfolio",     // appended
+
+            // AMM Trading
+            API::Amm(AmmEndpoint::Buy) => "amm/buy",
+            API::Amm(AmmEndpoint::Sell) => "amm/sell",
+            API::Amm(AmmEndpoint::AllowancesCheck) => "amm/allowances/check",
+            API::Amm(AmmEndpoint::AllowancesApprove) => "amm/allowances/approve",
+
+            // System
+            API::System(SystemEndpoint::MaintenanceStatus) => "maintenance/status",
+
+            // Referral
+            API::Referral(ReferralEndpoint::MyStats) => "referral/usdc/me",
+            API::Referral(ReferralEndpoint::MyReferrals) => "referral/usdc/referrals",
+            API::Referral(ReferralEndpoint::Leaderboard) => "referral/usdc/leaderboard",
+            API::Referral(ReferralEndpoint::FriendsLeaderboard) => {
+                "referral/usdc/leaderboard-friends"
+            }
+
+            // Leaderboard
+            API::Leaderboard(LeaderboardEndpoint::UnrealizedPnlMarket) => {
+                "leaderboard/pnl/unrealized/markets" // appended
+            }
+            API::Leaderboard(LeaderboardEndpoint::BiggestPositions) => {
+                "leaderboard/pnl/unrealized/biggest-positions"
+            }
         }
     }
 }

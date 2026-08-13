@@ -111,10 +111,14 @@ impl RetryConfig {
 /// ```no_run
 /// use limitless::retry::with_retry;
 ///
-/// let result = with_retry(
-///     Default::default(),
-///     || async { /* some fallible API call */ Ok::<_, limitless::LimitlessError>(()) },
-/// ).await;
+/// #[tokio::main]
+/// async fn main() {
+///     let result = with_retry(
+///         Default::default(),
+///         || async { /* some fallible API call */ Ok::<_, limitless::LimitlessError>(()) },
+///     ).await;
+///     let _ = result;
+/// }
 /// ```
 pub async fn with_retry<T, F, Fut>(
     config: RetryConfig,

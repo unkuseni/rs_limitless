@@ -1514,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "rs_limitless"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "base64",
  "chrono",
@@ -1526,7 +1526,6 @@ dependencies = [
  "k256",
  "log",
  "once_cell",
- "openssl",
  "rand 0.10.1",
  "reqwest",
  "serde",

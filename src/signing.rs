@@ -12,7 +12,7 @@
 //! let signer = Eip712Signer::new(
 //!     "0xYourPrivateKey...",
 //!     "0xVenueExchangeAddress...",  // from GET /markets/:slug
-//! );
+//! ).expect("valid private key and venue address");
 //!
 //! let order = signer.build_gtc_order(
 //!     "0xYourWallet...",
@@ -135,7 +135,6 @@ fn encode_decimal_string_as_u256(value: &str) -> Result<[u8; 32], String> {
     out[start..].copy_from_slice(&bytes);
     Ok(out)
 }
-
 
 /// Encode an Ethereum address as 32 bytes (left-padded, 20-byte address right-aligned).
 fn encode_address(addr: &[u8; 20]) -> [u8; 32] {
@@ -430,8 +429,8 @@ impl Eip712Signer {
             nonce: 0,
             fee_rate_bps,
             side: side.to_u8(),
-            signature,
-            signature_type: 0,
+            signature: Some(signature),
+            signature_type: Some(0),
         })
     }
 
@@ -493,8 +492,8 @@ impl Eip712Signer {
             nonce: 0,
             fee_rate_bps,
             side: side.to_u8(),
-            signature,
-            signature_type: 0,
+            signature: Some(signature),
+            signature_type: Some(0),
         })
     }
 }
